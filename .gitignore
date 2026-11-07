@@ -4,11 +4,26 @@ __pycache__/
 *$py.class
 *.pyc
 
-# Virtual Environment
+# Database & Dumps
+*.sqlite3
+db.sqlite3
+*.dump
+*.sql
+
+# Virtual Environment & Secrets
 env/
 venv/
 .env
+.env.local
 
 # Frontend
+node_modules/
 frontend/node_modules/
+dist/
 frontend/dist/
+*.local
+
+# Media Uploads (keep directory structure)
+backend/media/item_images/*
+!backend/media/item_images/.gitkeep
+

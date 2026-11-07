@@ -1,4 +1,3 @@
-
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import InputField from '../Components/InputField'
@@ -6,7 +5,7 @@ import Button from '../Components/Button'
 import {
   verifyPasswordResetOTP,
   resetPasswordWithOTP,
-    sendPasswordResetOTP,
+  sendPasswordResetOTP,
 } from '../services/authentication'
 import logo from '../assets/rentbee_logo.png'
 
@@ -14,56 +13,42 @@ function ResetPassword() {
   const location = useLocation()
   const navigate = useNavigate()
 
-  const email = location.state?.email || ''
-  const newPassword = location.state?.newPassword || ''
-
+  const [email, setEmail] = useState(location.state?.email || '')
   const [otp, setOtp] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [success, setSuccess] = useState(false)
   const [resending, setResending] = useState(false)
 
-  const getErrorMessage = (error) => {
-    try {
-      const details = JSON.parse(error.message)
-
-      if (details.detail) return details.detail
-
-      if (details.error) {
-        return Array.isArray(details.error)
-          ? details.error.join(', ')
-          : details.error
-      }
-
-      return Object.entries(details)
-        .map(([field, errors]) => {
-          const text = Array.isArray(errors)
-            ? errors.join(', ')
-            : String(errors)
-
-          return `${field}: ${text}`
-        })
-        .join('\n')
-    } catch {
-      return error.message || 'Something went wrong. Please try again.'
-    }
-  }
-
   const handleSubmit = async (event) => {
     event.preventDefault()
     setMessage('')
     setErrorMessage('')
 
-    if (!email || !newPassword) {
-      setErrorMessage(
-        'Password reset details are missing. Please start again.'
-      )
+    const trimmedEmail = email.trim()
+    const trimmedOtp = otp.trim()
+
+    if (!trimmedEmail) {
+      setErrorMessage('Please enter your email address.')
       return
     }
 
-    if (!otp.trim()) {
-      setErrorMessage('Please enter the OTP sent to your email.')
+    if (!trimmedOtp) {
+      setErrorMessage('Please enter the 6-digit code sent to your email.')
+      return
+    }
+
+    if (newPassword.length < 8) {
+      setErrorMessage('New password must be at least 8 characters long.')
+      return
+    }
+
+    if (newPassword !== confirmPassword) {
+      setErrorMessage('Passwords do not match.')
       return
     }
 
@@ -71,8 +56,8 @@ function ResetPassword() {
 
     try {
       const verification = await verifyPasswordResetOTP({
-        email,
-        otp: otp.trim(),
+        email: trimmedEmail,
+        otp: trimmedOtp,
       })
 
       if (!verification.reset_token) {
@@ -80,41 +65,39 @@ function ResetPassword() {
       }
 
       const result = await resetPasswordWithOTP({
-        email,
+        email: trimmedEmail,
         reset_token: verification.reset_token,
         new_password: newPassword,
       })
 
       setMessage(
-        result.message || 'Password reset successful. Please log in.'
+        result.message || 'Password reset successful! You can now log in.'
       )
       setSuccess(true)
     } catch (error) {
       console.error('Password reset error:', error)
-      setErrorMessage(getErrorMessage(error))
+      setErrorMessage(error.message || 'Failed to reset password. Please check the code and try again.')
     } finally {
       setLoading(false)
     }
   }
-    const handleResendOTP = async () => {
-    if (!email) {
-      setErrorMessage('Email is missing. Please start again.')
+
+  const handleResendOTP = async () => {
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail) {
+      setErrorMessage('Please provide your email address to resend the code.')
       return
     }
 
-    setMessage('')
-    setErrorMessage('')
     setResending(true)
+    setErrorMessage('')
+    setMessage('')
 
     try {
-      const result = await sendPasswordResetOTP({ email })
-
-      setOtp('')
-      setMessage(
-        result.message || 'A new OTP request has been sent.'
-      )
+      const result = await sendPasswordResetOTP({ email: trimmedEmail })
+      setMessage(result.message || 'A new reset code has been sent to your email.')
     } catch (error) {
-      setErrorMessage(getErrorMessage(error))
+      setErrorMessage(error.message || 'Could not resend reset code. Please try again.')
     } finally {
       setResending(false)
     }
@@ -123,6 +106,16 @@ function ResetPassword() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#FFF8F5] px-4 py-8">
       <div className="w-full max-w-md">
+        <div className="mb-4">
+          <Link
+            to="/login"
+            className="inline-flex items-center gap-2 text-sm font-medium text-[#9D4C29] transition hover:text-[#813B20]"
+          >
+            <span aria-hidden="true">←</span>
+            Back to Login
+          </Link>
+        </div>
+
         <div className="mb-6 flex justify-center">
           <img
             src={logo}
@@ -134,104 +127,98 @@ function ResetPassword() {
         <div className="rounded-2xl border border-[#F0E4DE] bg-white p-6 shadow-lg sm:p-8">
           <div className="mb-7 text-center">
             <h1 className="text-3xl font-bold text-[#493329]">
-              {success ? 'Password Reset Successful!' : 'Verify Your Email'}
+              Set New Password
             </h1>
-
             <p className="mt-2 text-sm text-[#8B776D]">
-              {success
-                ? 'Your password has been changed successfully.'
-                : `Enter the OTP sent to ${email || 'your registered email'}.`}
+              Enter the verification code sent to your email and choose your new password.
             </p>
           </div>
 
-          {!success && (
-            <form onSubmit={handleSubmit} className="space-y-5">
+          {success ? (
+            <div className="space-y-5 text-center">
+              <div className="rounded-lg bg-green-50 p-4 text-sm font-medium text-green-700">
+                {message}
+              </div>
+
+              <Link
+                to="/login"
+                className="block w-full rounded-xl bg-[#9D4C29] px-4 py-3 font-semibold text-white transition hover:bg-[#843E21]"
+              >
+                Log In with New Password
+              </Link>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
               <InputField
                 label="Email Address"
                 name="email"
                 type="email"
+                placeholder="you@example.com"
                 value={email}
-                onChange={() => {}}
+                onChange={(e) => setEmail(e.target.value)}
+                required
                 autoComplete="email"
+              />
+
+              <InputField
+                label="Verification Code (OTP)"
+                name="otp"
+                type="text"
+                placeholder="Enter 6-digit code"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
                 required
               />
 
               <InputField
-                label="Email OTP"
-                name="otp"
-                type="text"
-                placeholder="Enter your OTP"
-                value={otp}
-                onChange={(event) => setOtp(event.target.value)}
-                autoComplete="one-time-code"
+                label="New Password"
+                name="newPassword"
+                type="password"
+                placeholder="At least 8 characters"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
                 required
+                autoComplete="new-password"
               />
-              <div className="text-right">
-  <button
-    type="button"
-    onClick={handleResendOTP}
-    disabled={resending || loading}
-    className="text-sm font-semibold text-[#9D4C29] hover:underline disabled:opacity-50"
-  >
-    {resending ? 'Sending...' : 'Resend OTP'}
-  </button>
-</div>
+
+              <InputField
+                label="Confirm New Password"
+                name="confirmPassword"
+                type="password"
+                placeholder="Re-enter new password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+              />
 
               {message && (
-                <p
-                  role="status"
-                  className="rounded-lg bg-green-50 p-3 text-sm text-green-700"
-                >
+                <p role="status" className="rounded-lg bg-green-50 p-3 text-sm text-green-700">
                   {message}
                 </p>
               )}
 
               {errorMessage && (
-                <p
-                  role="alert"
-                  className="whitespace-pre-line rounded-lg bg-red-50 p-3 text-sm text-red-700"
-                >
+                <p role="alert" className="whitespace-pre-line rounded-lg bg-red-50 p-3 text-sm text-red-700">
                   {errorMessage}
                 </p>
               )}
 
               <Button type="submit" disabled={loading}>
-                {loading ? 'Verifying...' : 'Verify OTP & Reset Password'}
+                {loading ? 'Resetting Password...' : 'Reset Password'}
               </Button>
+
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={handleResendOTP}
+                  disabled={resending || loading}
+                  className="text-sm font-semibold text-[#9D4C29] hover:underline disabled:opacity-50"
+                >
+                  {resending ? 'Resending Code...' : 'Resend Code'}
+                </button>
+              </div>
             </form>
-          )}
-
-          {success && (
-            <div className="space-y-5 text-center">
-              <p
-                role="status"
-                className="rounded-lg bg-green-50 p-3 text-sm text-green-700"
-              >
-                {message}
-              </p>
-
-              <Button type="button" onClick={() => navigate('/login')}>
-                Back to Login
-              </Button>
-            </div>
-          )}
-
-          {!success && (
-            <p className="mt-6 text-center text-sm text-[#8B776D]">
-              <Link
-                to="/forget-password"
-                className="font-semibold text-[#9D4C29] hover:underline"
-              >
-                Start Again
-              </Link>
-              {' · '}
-              <Link
-                to="/login"
-                className="font-semibold text-[#9D4C29] hover:underline"
-              >
-                Back to Login
-              </Link>
-            </p>
           )}
         </div>
       </div>

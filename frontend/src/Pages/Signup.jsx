@@ -100,8 +100,8 @@ const handleChange = (event) => {
         otp: otp.trim(),
       })
 
-      if (data.token) {
-       saveAuthTokens(data.access, data.refresh)
+      if (data.access && data.refresh) {
+        saveAuthTokens(data.access, data.refresh)
       }
 
       setStep('success')
@@ -299,10 +299,10 @@ const handleChange = (event) => {
               )}
 
               <Link
-                to="/login"
+                to="/"
                 className="block w-full rounded-xl bg-[#9D4C29] px-4 py-3 text-center font-semibold text-white transition hover:bg-[#843E21]"
               >
-                Log In
+                Go to Home
               </Link>
             </div>
           )}

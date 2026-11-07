@@ -99,8 +99,15 @@ class AdminItemListCreateView(APIView):
 
     def get(self, request):
         qs = self.get_queryset()
-        page_num = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
+        try:
+            page_num = max(1, int(request.query_params.get('page', 1)))
+        except (ValueError, TypeError):
+            page_num = 1
+
+        try:
+            page_size = max(1, min(100, int(request.query_params.get('page_size', 10))))
+        except (ValueError, TypeError):
+            page_size = 10
 
         paginator = Paginator(qs, page_size)
         page_obj = paginator.get_page(page_num)
@@ -232,8 +239,16 @@ class PublicItemListView(APIView):
         allowed_sorts = {'-created_at', 'created_at', 'name', 'rental_price', '-rental_price'}
         qs = qs.order_by(sort if sort in allowed_sorts else '-created_at')
 
-        page_num = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 12))
+        try:
+            page_num = max(1, int(request.query_params.get('page', 1)))
+        except (ValueError, TypeError):
+            page_num = 1
+
+        try:
+            page_size = max(1, min(100, int(request.query_params.get('page_size', 12))))
+        except (ValueError, TypeError):
+            page_size = 12
+
         paginator = Paginator(qs, page_size)
         page_obj = paginator.get_page(page_num)
 
@@ -256,3 +271,18 @@ class PublicItemDetailView(APIView):
             is_published=True
         )
         return Response(ItemSerializer(item, context={'request': request}).data)
+
+
+class PublicCategoryListView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        categories = Category.objects.filter(
+            is_active=True,
+            is_deleted=False
+        ).exclude(name__iexact='all categories').exclude(icon='▦').annotate(
+            items_count=Count('items', filter=Q(items__is_deleted=False, items__is_published=True))
+        ).order_by('name')
+
+        serializer = CategorySerializer(categories, many=True)
+        return Response(serializer.data)

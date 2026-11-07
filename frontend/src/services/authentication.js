@@ -1,5 +1,7 @@
 
-const API_BASE_URL = 'http://127.0.0.1:8000/api'
+const API_BASE_URL =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
+  'http://127.0.0.1:8000/api'
 
 
 // ==========================================
@@ -99,7 +101,9 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
     '/token/refresh/',
   ]
 
-  const requiresAuth = !publicEndpoints.includes(endpoint)
+  const pathOnly = endpoint.split('?')[0]
+  const isPublic = publicEndpoints.includes(pathOnly) || pathOnly.startsWith('/items/') || pathOnly.startsWith('/categories/')
+  const requiresAuth = !isPublic
 
   const accessToken = requiresAuth
     ? getAccessToken()

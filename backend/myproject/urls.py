@@ -3,6 +3,7 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenRefreshView
+from catalog.views import PublicCategoryListView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -14,6 +15,7 @@ urlpatterns = [
     ),
     path("accounts/", include("allauth.urls")),
     path('api/addresses/', include('addresses.urls')),
+    path('api/categories/', PublicCategoryListView.as_view(), name='public-category-list'),
     path('api/admin/categories/', include('catalog.urls')),
     path('api/admin/items/', include('catalog.item_urls')),
     path('api/items/', include('catalog.public_urls')),

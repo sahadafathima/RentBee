@@ -86,7 +86,10 @@ class ItemSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'slug', 'owner', 'created_at', 'updated_at', 'is_deleted']
 
     def get_primary_image_url(self, obj):
-        img = obj.images.filter(is_primary=True).first() or obj.images.first()
+        images = list(obj.images.all())
+        if not images:
+            return None
+        img = next((i for i in images if i.is_primary), images[0])
         if not img or not img.image:
             return None
         request = self.context.get('request')

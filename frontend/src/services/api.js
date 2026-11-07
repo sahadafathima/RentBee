@@ -51,6 +51,19 @@ export function getAddresses() {
   return apiRequest('/addresses/')
 }
 
+export function updateAddress(id, addressData) {
+  return apiRequest(`/addresses/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(addressData),
+  })
+}
+
+export function deleteAddress(id) {
+  return apiRequest(`/addresses/${id}/`, {
+    method: 'DELETE',
+  })
+}
+
 // Get all users with search and pagination
 export function getAdminUsers(params = {}) {
   const query = new URLSearchParams(params).toString()
@@ -121,8 +134,16 @@ export function softDeleteAdminItem(id) {
   })
 }
 
-// PUBLIC ITEMS API (Customer Frontend)
+// PUBLIC ITEMS & CATEGORIES API (Customer Frontend)
+export function getPublicCategories() {
+  return apiRequest('/categories/')
+}
+
 export function getPublicItems(params = {}) {
   const q = new URLSearchParams(Object.entries(params).filter(([_, v]) => v !== undefined && v !== '')).toString()
   return apiRequest(`/items/${q ? `?${q}` : ''}`)
+}
+
+export function getPublicItem(id) {
+  return apiRequest(`/items/${id}/`)
 }

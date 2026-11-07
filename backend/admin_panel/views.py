@@ -23,7 +23,7 @@ class AdminUserListView(APIView):
         users = User.objects.filter(
             is_staff=False,
             is_superuser=False
-        )
+        ).prefetch_related('addresses')
 
         # Search by name, email or phone number
         search = request.query_params.get("search", "").strip()
@@ -108,7 +108,7 @@ class AdminUserDetailView(APIView):
     def get(self, request, pk):
 
         try:
-            user = User.objects.get(
+            user = User.objects.prefetch_related('addresses').get(
                 pk=pk,
                 is_staff=False,
                 is_superuser=False
@@ -136,7 +136,7 @@ class AdminUserBlockView(APIView):
     def patch(self, request, pk):
 
         try:
-            user = User.objects.get(
+            user = User.objects.prefetch_related('addresses').get(
                 pk=pk,
                 is_staff=False,
                 is_superuser=False

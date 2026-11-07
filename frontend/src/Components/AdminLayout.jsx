@@ -1,6 +1,7 @@
-import { Link, useLocation } from 'react-router-dom'
-import { Users, LayoutGrid, Package, ChevronRight } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Users, LayoutGrid, Package, ChevronRight, LogOut, ExternalLink } from 'lucide-react'
 import rentBeeLogo from '../assets/rentbee_logo.png'
+import { clearAuthTokens } from '../services/authentication'
 
 const NAV = [
   { path: '/admin/users', label: 'User Management', icon: Users },
@@ -10,6 +11,13 @@ const NAV = [
 
 export default function AdminLayout({ pageTitle = 'Overview', breadcrumbs = [], children }) {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
+
+  const handleAdminLogout = () => {
+    clearAuthTokens()
+    localStorage.removeItem('rentbee_is_admin')
+    navigate('/admin/login')
+  }
 
   return (
     <div className="min-h-screen bg-[#FAF5F0] text-[#302820] font-sans">
@@ -21,7 +29,6 @@ export default function AdminLayout({ pageTitle = 'Overview', breadcrumbs = [], 
             alt="RentBee Logo"
             className="h-10 w-auto object-contain"
           />
-           
         </Link>
 
         <nav className="flex-1 flex flex-col gap-1.5">
@@ -43,12 +50,40 @@ export default function AdminLayout({ pageTitle = 'Overview', breadcrumbs = [], 
             )
           })}
         </nav>
+
+        {/* Sidebar Footer */}
+        <div className="pt-4 border-t border-[#eee3da] flex flex-col gap-2">
+          <Link
+            to="/"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-[#766B63] hover:text-[#302820] transition rounded-lg hover:bg-white"
+          >
+            <ExternalLink size={15} />
+            <span>View Marketplace</span>
+          </Link>
+          <button
+            type="button"
+            onClick={handleAdminLogout}
+            className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-red-600 hover:text-red-700 transition rounded-lg hover:bg-red-50 text-left w-full cursor-pointer"
+          >
+            <LogOut size={15} />
+            <span>Sign Out Admin</span>
+          </button>
+        </div>
       </aside>
 
       {/* Main Content Area */}
       <div className="pl-64">
-        <header className="fixed top-0 left-64 right-0 h-16 bg-white/90 backdrop-blur-md shadow-xs z-40 flex items-center px-8 border-b border-[#eee3da]">
+        <header className="fixed top-0 left-64 right-0 h-16 bg-white/90 backdrop-blur-md shadow-xs z-40 flex items-center justify-between px-8 border-b border-[#eee3da]">
           <span className="text-xl font-bold text-[#302820]">{pageTitle}</span>
+          <button
+            type="button"
+            onClick={handleAdminLogout}
+            className="flex items-center gap-2 text-xs font-semibold text-gray-500 hover:text-red-600 transition"
+          >
+            <LogOut size={16} /> Logout
+          </button>
         </header>
 
         <main className="pt-20 p-8 min-h-screen bg-[#FAF5F0]">

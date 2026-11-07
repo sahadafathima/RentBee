@@ -822,8 +822,6 @@ def send_email_change_otp(request):
     )
 
     try:
-        print("DEBUG: OTP generated:", otp)
-
         send_mail(
             subject="RentBee Email Change Verification",
             message=f"Your email verification OTP is {otp}. It expires in 5 minutes.",
@@ -832,10 +830,7 @@ def send_email_change_otp(request):
             fail_silently=False,
         )
 
-        print("DEBUG: Email sending completed")
-
-    except Exception as e:
-        print("DEBUG: Email sending failed:", e)
+    except Exception:
         EmailChangeOTP.objects.filter(user=request.user).delete()
 
         return Response(
