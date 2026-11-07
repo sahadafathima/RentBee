@@ -1,5 +1,6 @@
 
 import { useEffect, useState } from 'react'
+import AdminLayout from '../Components/AdminLayout'
 import {
   getAdminUsers,
   updateAdminUserStatus,
@@ -101,7 +102,11 @@ function UserManagement() {
   const totalPages = Math.ceil(totalUsers / 10)
 
   return (
-    <div className="min-h-screen bg-[#FAF5F0] p-6 text-[#302820]">
+    <AdminLayout
+      pageTitle="User Management"
+      breadcrumbs={['Admin Panel', 'Users', 'User Management']}
+    >
+      <div className="w-full text-[#302820]">
 
       <div className="mb-6 flex items-center justify-between">
         <div>
@@ -287,7 +292,8 @@ function UserManagement() {
         </div>
       )}
 
-    </div>
+      </div>
+    </AdminLayout>
   )
 }
 

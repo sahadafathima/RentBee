@@ -10,6 +10,8 @@ import Profile from './Pages/Profile'
 import EditProfile from './Pages/EditProfile'
 import MyAddress from './Pages/MyAddress'
 import UserManagement from './Pages/UserManagement'
+import AdminCategoryManagement from './Pages/AdminCategoryManagement';
+import AdminItemManagement from './Pages/AdminItemManagement';
 
 import ProtectedAdminRoute from './Components/ProtectedAdminRoute'
 
@@ -33,6 +35,14 @@ function App() {
           <Route
             path="/admin/users"
             element={<UserManagement />}
+          />
+          <Route
+            path="/admin/categories"
+            element={<AdminCategoryManagement />}
+          />
+          <Route
+            path="/admin/items"
+            element={<AdminItemManagement />}
           />
         </Route>
 

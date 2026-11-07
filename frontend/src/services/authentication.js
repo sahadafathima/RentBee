@@ -106,8 +106,10 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
     : null
 
 
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
+
   const headers = {
-    ...(options.body instanceof FormData
+    ...(isFormData
       ? {}
       : { 'Content-Type': 'application/json' }),
 
@@ -116,6 +118,10 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
     ...(accessToken
       ? { Authorization: `Bearer ${accessToken}` }
       : {}),
+  }
+
+  if (isFormData && headers['Content-Type']) {
+    delete headers['Content-Type']
   }
 
   let response
@@ -190,14 +196,22 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
   // 5. HANDLE API ERRORS
 
   if (!response.ok) {
+    let errorMessage = data.detail || data.error
 
-    const message = data.detail || data.error
+    if (!errorMessage && typeof data === 'object' && data !== null) {
+      const fieldErrors = Object.entries(data)
+        .map(([field, errs]) => `${field}: ${Array.isArray(errs) ? errs.join(', ') : errs}`)
+        .filter(Boolean)
+      if (fieldErrors.length > 0) {
+        errorMessage = fieldErrors.join(' | ')
+      }
+    }
 
-    const errorMessage = Array.isArray(message)
-      ? message.join(', ')
-      : typeof message === 'string'
-        ? message
-        : `Request failed with status ${response.status}`
+    if (!errorMessage) {
+      errorMessage = `Request failed with status ${response.status}`
+    } else if (Array.isArray(errorMessage)) {
+      errorMessage = errorMessage.join(', ')
+    }
 
     throw new Error(errorMessage)
   }
