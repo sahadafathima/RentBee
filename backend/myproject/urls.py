@@ -2,17 +2,11 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, include
-from rest_framework_simplejwt.views import TokenRefreshView
 from catalog.views import PublicCategoryListView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include("users.urls")),
-    path(
-        "api/token/refresh/",
-        TokenRefreshView.as_view(),
-        name="token_refresh",
-    ),
     path("accounts/", include("allauth.urls")),
     path('api/addresses/', include('addresses.urls')),
     path('api/categories/', PublicCategoryListView.as_view(), name='public-category-list'),

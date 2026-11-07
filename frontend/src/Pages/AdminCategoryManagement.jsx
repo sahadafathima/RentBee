@@ -4,7 +4,7 @@ import { getAdminCategories, createCategory, updateCategory, softDeleteCategory 
 import { Plus, Search, X } from 'lucide-react'
 
 // Real category icons — does NOT include '▦' (All Categories) since that is a UI-only sentinel
-export const HOMEPAGE_ICONS = [
+const HOMEPAGE_ICONS = [
   { icon: '🎧', name: 'Electronics' },
   { icon: '📷', name: 'Cameras' },
   { icon: '🚲', name: 'Bikes' },

@@ -6,41 +6,6 @@ from .models import Profile
 User = get_user_model()
 
 
-class SignupSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(
-        write_only=True,
-        min_length=8,
-        max_length=128,
-        trim_whitespace=False
-    )
-
-    class Meta:
-        model = User
-        fields = [
-            "full_name",
-            "email",
-            "password",
-            "phone_number",
-        ]
-
-    def validate_email(self, value):
-        if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError(
-                "This email is already registered."
-            )
-        return value
-
-    def validate_phone_number(self, value):
-        if User.objects.filter(phone_number=value).exists():
-            raise serializers.ValidationError(
-                "This phone number is already registered."
-            )
-        return value
-
-    def create(self, validated_data):
-        return User.objects.create_user(**validated_data)
-
-
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(

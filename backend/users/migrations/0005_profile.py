@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('users', '0005_loginotp'),
+        ('users', '0004_passwordresetotp'),
     ]
 
     operations = [
@@ -23,3 +23,4 @@ class Migration(migrations.Migration):
             ],
         ),
     ]
+

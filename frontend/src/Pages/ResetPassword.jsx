@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import InputField from '../Components/InputField'
 import Button from '../Components/Button'
 import {
@@ -11,7 +11,6 @@ import logo from '../assets/rentbee_logo.png'
 
 function ResetPassword() {
   const location = useLocation()
-  const navigate = useNavigate()
 
   const [email, setEmail] = useState(location.state?.email || '')
   const [otp, setOtp] = useState('')

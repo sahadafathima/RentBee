@@ -7,6 +7,7 @@ from django.contrib.auth.hashers import make_password, check_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
+from django.core.validators import validate_email
 from django.utils import timezone
 
 from rest_framework import status
@@ -23,7 +24,6 @@ from rest_framework_simplejwt.exceptions import TokenError
 from .models import (
     PendingSignup,
     PasswordResetOTP,
-    LoginOTP,
     Profile,
     EmailChangeOTP,
 )
@@ -53,20 +53,6 @@ def otp_error(message, code=status.HTTP_400_BAD_REQUEST):
 
 
 # -------------------- SIGNUP --------------------
-
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def signup(request):
-    return Response(
-        {
-            "message": (
-                "Use /signup/send-otp/ to request an OTP, "
-                "then /signup/verify-otp/ to complete signup."
-            )
-        },
-        status=status.HTTP_400_BAD_REQUEST,
-    )
-
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -342,149 +328,6 @@ def admin_login(request):
     "is_staff": user.is_staff,
     "is_superuser": user.is_superuser,
 },
-        },
-        status=status.HTTP_200_OK,
-    )
-
-
-# -------------------- LOGIN OTP --------------------
-
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def send_login_otp(request):
-    email = get_text(request.data, "email").lower()
-
-    if not email:
-        return otp_error("Email is required.")
-
-    user = User.objects.filter(
-        email__iexact=email,
-        is_email_verified=True,
-        is_active=True,
-        is_staff=False,
-        is_superuser=False,
-    ).first()
-
-    if user is None:
-        return Response(
-            {
-                "message": (
-                    "If an eligible account exists, "
-                    "a login code will be sent."
-                )
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    otp = f"{secrets.randbelow(1_000_000):06d}"
-
-    LoginOTP.objects.update_or_create(
-        email=user.email,
-        defaults={
-            "otp_hash": make_password(otp),
-            "expires_at": timezone.now() + timedelta(minutes=10),
-            "attempts": 0,
-        },
-    )
-
-    try:
-        send_otp_email(
-            "Your RentBee login code",
-            (
-                f"Your RentBee login code is {otp}.\n"
-                "It expires in 10 minutes. Do not share this code."
-            ),
-            user.email,
-        )
-    except Exception:
-        LoginOTP.objects.filter(
-            email__iexact=user.email
-        ).delete()
-
-        return Response(
-            {"error": "Could not send the email. Please try again."},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
-
-    return Response(
-        {
-            "message": (
-                "If an eligible account exists, "
-                "a login code will be sent."
-            )
-        },
-        status=status.HTTP_200_OK,
-    )
-
-
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def verify_login_otp(request):
-    email = get_text(request.data, "email").lower()
-    otp = get_text(request.data, "otp")
-
-    if not email or not otp:
-        return otp_error("Email and OTP are required.")
-
-    login_request = LoginOTP.objects.filter(
-        email__iexact=email
-    ).first()
-
-    if login_request is None:
-        return otp_error("Invalid or expired login code. Request a new one.")
-
-    if timezone.now() >= login_request.expires_at:
-        login_request.delete()
-        return otp_error("Login code expired. Request a new one.")
-
-    if login_request.attempts >= 5:
-        login_request.delete()
-        return otp_error(
-            "Too many attempts. Request a new code.",
-            status.HTTP_429_TOO_MANY_REQUESTS,
-        )
-
-    login_request.attempts += 1
-    login_request.save(update_fields=["attempts"])
-
-    if not check_password(otp, login_request.otp_hash):
-        if login_request.attempts >= 5:
-            login_request.delete()
-            return otp_error(
-                "Too many attempts. Request a new code.",
-                status.HTTP_429_TOO_MANY_REQUESTS,
-            )
-
-        return otp_error("Invalid login code.")
-
-    user = User.objects.filter(
-        email__iexact=email,
-        is_email_verified=True,
-        is_active=True,
-        is_staff=False,
-        is_superuser=False,
-    ).first()
-
-    login_request.delete()
-
-    if user is None:
-        return otp_error(
-            "Unable to log in. Please use regular login."
-        )
-
-    refresh = RefreshToken.for_user(user)
-
-    return Response(
-        {
-            "message": "OTP login successful.",
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
-            "user": {
-                "user_id": user.pk,
-                "full_name": user.full_name,
-                "email": user.email,
-                "phone_number": user.phone_number,
-            },
         },
         status=status.HTTP_200_OK,
     )
@@ -785,8 +628,6 @@ def send_email_change_otp(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    from django.core.validators import validate_email
-
     try:
         validate_email(new_email)
     except ValidationError:
@@ -794,8 +635,6 @@ def send_email_change_otp(request):
             {"error": "Enter a valid email address."},
             status=status.HTTP_400_BAD_REQUEST
         )
-
-    User = get_user_model()
 
     if User.objects.filter(email__iexact=new_email).exists():
         return Response(
@@ -899,8 +738,6 @@ def verify_email_change_otp(request):
             {"error": "Invalid OTP."},
             status=status.HTTP_400_BAD_REQUEST
         )
-
-    User = get_user_model()
 
     if User.objects.filter(
         email__iexact=email_otp.new_email

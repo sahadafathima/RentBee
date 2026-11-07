@@ -7,12 +7,11 @@ import { Search, X, Package, SlidersHorizontal } from 'lucide-react'
 
 export default function Browse() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const categoryParam = searchParams.get('category') || ''
+  const selectedCategory = searchParams.get('category') || ''
   const searchParam = searchParams.get('search') || ''
 
   const [items, setItems] = useState([])
   const [categories, setCategories] = useState([])
-  const [selectedCategory, setSelectedCategory] = useState(categoryParam)
   const [search, setSearch] = useState(searchParam)
   const [sort, setSort] = useState('-created_at')
   const [loading, setLoading] = useState(true)
@@ -25,10 +24,6 @@ export default function Browse() {
   }, [])
 
   useEffect(() => {
-    setSelectedCategory(categoryParam)
-  }, [categoryParam])
-
-  useEffect(() => {
     setSearch(searchParam)
   }, [searchParam])
 
@@ -37,7 +32,7 @@ export default function Browse() {
     try {
       const data = await getPublicItems({
         category: selectedCategory,
-        search,
+        search: searchParam,
         sort,
       })
       setItems(data.results || [])
@@ -51,19 +46,18 @@ export default function Browse() {
 
   useEffect(() => {
     loadItems()
-  }, [selectedCategory, search, sort])
+  }, [selectedCategory, searchParam, sort])
 
   const handleSearchSubmit = (e) => {
     e.preventDefault()
     const nextParams = new URLSearchParams(searchParams)
-    if (search) nextParams.set('search', search)
+    if (search.trim()) nextParams.set('search', search.trim())
     else nextParams.delete('search')
     setSearchParams(nextParams)
   }
 
   const handleCategorySelect = (catId) => {
     const nextId = selectedCategory === String(catId) ? '' : String(catId)
-    setSelectedCategory(nextId)
     const nextParams = new URLSearchParams(searchParams)
     if (nextId) nextParams.set('category', nextId)
     else nextParams.delete('category')

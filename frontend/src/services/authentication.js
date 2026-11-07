@@ -89,8 +89,6 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
     '/signup/verify-otp/',
 
     '/login/',
-    '/login/send-otp/',
-    '/login/verify-otp/',
 
     '/admin/login/',
 
@@ -281,21 +279,7 @@ export function adminLogin(data) {
 }
 
 
-export function sendLoginOTP(data) {
-  return apiRequest('/login/send-otp/', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-}
-
-export function verifyLoginOTP(data) {
-  return apiRequest('/login/verify-otp/', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-}
-
-// 11. USER LOGOUT
+// 10. USER LOGOUT
 
 export async function userLogout() {
   const refreshToken = getRefreshToken()

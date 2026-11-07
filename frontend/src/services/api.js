@@ -88,7 +88,7 @@ export function updateAdminUserStatus(userId, action) {
 
 // CATEGORY MANAGEMENT API (Admin)
 export function getAdminCategories(params = {}) {
-  const q = new URLSearchParams(Object.entries(params).filter(([_, v]) => v)).toString()
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString()
   return apiRequest(`/admin/categories/${q ? `?${q}` : ''}`)
 }
 
@@ -106,7 +106,7 @@ export function softDeleteCategory(id) {
 
 // ITEM MANAGEMENT API (Admin)
 export function getAdminItems(params = {}) {
-  const q = new URLSearchParams(Object.entries(params).filter(([_, v]) => v !== undefined && v !== '')).toString()
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '')).toString()
   return apiRequest(`/admin/items/${q ? `?${q}` : ''}`)
 }
 
@@ -140,7 +140,7 @@ export function getPublicCategories() {
 }
 
 export function getPublicItems(params = {}) {
-  const q = new URLSearchParams(Object.entries(params).filter(([_, v]) => v !== undefined && v !== '')).toString()
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '')).toString()
   return apiRequest(`/items/${q ? `?${q}` : ''}`)
 }
 
