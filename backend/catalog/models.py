@@ -44,6 +44,7 @@ class Item(models.Model):
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='items')
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='owned_items', null=True, blank=True)
     rental_price = models.DecimalField(max_digits=10, decimal_places=2)
+    deposit = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, blank=True)
     stock = models.PositiveIntegerField(default=1)
     is_published = models.BooleanField(default=True)
     is_deleted = models.BooleanField(default=False)
@@ -83,3 +84,15 @@ class ItemImage(models.Model):
 
     def __str__(self):
         return f"Image for {self.item.name} ({'Primary' if self.is_primary else 'Gallery'})"
+
+
+class RentalKitItem(models.Model):
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='rental_kit_items')
+    name = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f"{self.name} ({self.item.name})"

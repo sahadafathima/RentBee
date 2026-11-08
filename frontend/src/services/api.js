@@ -140,7 +140,9 @@ export function getPublicCategories() {
 }
 
 export function getPublicItems(params = {}) {
-  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '')).toString()
+  const q = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+  ).toString()
   return apiRequest(`/items/${q ? `?${q}` : ''}`)
 }
 

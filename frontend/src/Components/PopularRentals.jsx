@@ -6,10 +6,15 @@ import { Package } from 'lucide-react'
 function PopularRentals({ selectedCategory = '' }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
+  const [prevCategory, setPrevCategory] = useState(selectedCategory)
+
+  if (selectedCategory !== prevCategory) {
+    setPrevCategory(selectedCategory)
+    setLoading(true)
+  }
 
   useEffect(() => {
     let isCurrent = true
-    setLoading(true)
 
     getPublicItems({
       category: selectedCategory,
@@ -100,10 +105,6 @@ function PopularRentals({ selectedCategory = '' }) {
                     className="h-48 w-full object-cover bg-orange-50"
                   />
 
-                  <span className="absolute left-3 top-3 rounded-md bg-white/90 backdrop-blur-xs px-2 py-0.5 text-[11px] font-semibold text-[#D97745]">
-                    {item.category_icon || '📦'} {item.category_name}
-                  </span>
-
                   <button
                     type="button"
                     aria-label={`Add ${item.name} to wishlist`}
@@ -119,9 +120,6 @@ function PopularRentals({ selectedCategory = '' }) {
                     <h3 className="text-base font-bold text-[#352720] line-clamp-1">
                       {item.name}
                     </h3>
-                    <p className="mt-1 text-xs text-gray-500 line-clamp-2">
-                      {item.description || 'Verified rental item in top working condition.'}
-                    </p>
                   </div>
 
                   <div className="mt-4 border-t border-orange-50 pt-3">
@@ -137,8 +135,12 @@ function PopularRentals({ selectedCategory = '' }) {
                       </span>
                     </div>
 
+                    <div className="mt-1 text-xs text-gray-500">
+                      Deposit: <span className="font-semibold text-[#352720]">₹{item.deposit ?? 0}</span>
+                    </div>
+
                     <Link
-                      to={`/browse?search=${encodeURIComponent(item.name)}`}
+                      to={`/items/${item.id}`}
                       className="mt-3 block w-full text-center rounded-xl bg-[#9D4C29] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#813B20]"
                     >
                       View Details

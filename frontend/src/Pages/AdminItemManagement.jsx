@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import AdminLayout from '../Components/AdminLayout'
 import { getAdminItems, createAdminItem, updateAdminItem, softDeleteAdminItem, getAdminCategories } from '../services/api'
 import { getCategoryIcon } from './AdminCategoryManagement'
@@ -23,6 +23,7 @@ export default function AdminItemManagement() {
   const [modal, setModal] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [modalError, setModalError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
 
   const notify = (msg) => { setToast(msg); setTimeout(() => setToast(''), 3500) }
 
@@ -41,20 +42,27 @@ export default function AdminItemManagement() {
     loadCategories()
   }, [])
 
-  const loadItems = async () => {
-    setLoading(true)
-    try {
-      const data = await getAdminItems({ search, category: categoryFilter, status: statusFilter, sort, page, page_size: 8 })
-      setItems(data.results || []); setTotalPages(data.total_pages || 1); setTotalCount(data.count || 0)
-      if (data.stats) setStats(data.stats)
-    } catch (err) {
-      notify(err.message || 'Failed to load items.')
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    let isCurrent = true
+    getAdminItems({ search, category: categoryFilter, status: statusFilter, sort, page, page_size: 8 })
+      .then((data) => {
+        if (!isCurrent) return
+        setItems(data.results || [])
+        setTotalPages(data.total_pages || 1)
+        setTotalCount(data.count || 0)
+        if (data.stats) setStats(data.stats)
+      })
+      .catch((err) => {
+        if (!isCurrent) return
+        notify(err.message || 'Failed to load items.')
+      })
+      .finally(() => {
+        if (isCurrent) setLoading(false)
+      })
+    return () => {
+      isCurrent = false
     }
-  }
-
-  useEffect(() => { loadItems() }, [search, categoryFilter, statusFilter, sort, page])
+  }, [search, categoryFilter, statusFilter, sort, page, reloadToken])
 
   const handleSave = async (formData, id) => {
     setSubmitting(true); setModalError('')
@@ -63,7 +71,7 @@ export default function AdminItemManagement() {
       else if (modal.mode === 'edit') { await updateAdminItem(id, formData); notify('Item updated successfully.') }
       else if (modal.mode === 'delete') { await softDeleteAdminItem(modal.item.id); notify(`Item "${modal.item.name}" soft-deleted.`) }
       setModal(null)
-      loadItems()
+      setReloadToken((t) => t + 1)
       loadCategories()
       window.dispatchEvent(new CustomEvent('rentbee:items_changed'))
     } catch (err) {
@@ -138,7 +146,7 @@ export default function AdminItemManagement() {
             <table className="w-full border-collapse text-left text-sm">
               <thead className="bg-[#f7eee7] text-[#51463d]">
                 <tr>
-                  <th className="p-4 font-semibold">ITEM</th><th className="p-4 font-semibold">CATEGORY</th><th className="p-4 font-semibold">OWNER</th><th className="p-4 font-semibold">RENTAL PRICE</th><th className="p-4 font-semibold">STOCK</th><th className="p-4 font-semibold">STATUS</th><th className="p-4 font-semibold">DATE LISTED</th><th className="p-4 font-semibold text-right">ACTIONS</th>
+                  <th className="p-4 font-semibold">ITEM</th><th className="p-4 font-semibold">CATEGORY</th><th className="p-4 font-semibold">OWNER</th><th className="p-4 font-semibold">RENTAL PRICE</th><th className="p-4 font-semibold">STOCK</th><th className="p-4 font-semibold">DEPOSIT</th><th className="p-4 font-semibold">STATUS</th><th className="p-4 font-semibold">DATE LISTED</th><th className="p-4 font-semibold text-right">ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
@@ -162,6 +170,7 @@ export default function AdminItemManagement() {
                     <td className="p-4 text-gray-600">{item.owner_name}</td>
                     <td className="p-4 font-semibold text-[#9D4C29] whitespace-nowrap">₹{item.rental_price} <span className="text-xs font-normal text-gray-500">/ day</span></td>
                     <td className="p-4 text-gray-600 whitespace-nowrap">{item.stock} available</td>
+                    <td className="p-4 font-semibold text-[#302820] whitespace-nowrap">₹{item.deposit ?? 0}</td>
                     <td className="p-4 whitespace-nowrap">
                       <span className={item.is_deleted ? 'rounded-full bg-red-100 px-3 py-1 text-xs text-red-700' : item.is_published ? 'rounded-full bg-green-100 px-3 py-1 text-xs text-green-700' : 'rounded-full bg-orange-100 px-3 py-1 text-xs text-orange-700'}>
                         {item.is_deleted ? 'Deleted' : item.is_published ? 'Published' : 'Unpublished'}
@@ -195,7 +204,18 @@ export default function AdminItemManagement() {
           </div>
         </div>
 
-        {modal && <ItemModal mode={modal.mode} item={modal.item} categories={formCategories} loading={submitting} error={modalError} onClose={() => setModal(null)} onSave={handleSave} />}
+        {modal && (
+          <ItemModal
+            key={`${modal.mode}-${modal.item?.id || 'new'}`}
+            mode={modal.mode}
+            item={modal.item}
+            categories={formCategories}
+            loading={submitting}
+            error={modalError}
+            onClose={() => setModal(null)}
+            onSave={handleSave}
+          />
+        )}
         {toast && <div className="fixed bottom-6 right-6 z-50 rounded-lg bg-[#302820] text-white px-5 py-3 shadow-lg text-sm font-medium">{toast}</div>}
       </div>
     </AdminLayout>
@@ -203,34 +223,74 @@ export default function AdminItemManagement() {
 }
 
 function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) {
-  const [form, setForm] = useState({
-    name: item?.name || '', categoryId: item?.category_id || (categories.length > 0 ? categories[0].id : ''),
-    rentalPrice: item?.rental_price || '', stock: item?.stock ?? 1,
-    description: item?.description || '', isPublished: item ? Boolean(item.is_published) : true
-  })
-
-  // Guard: if categories load after modal mounts and no category is selected yet, pick the first
-  useEffect(() => {
-    if (!form.categoryId && categories.length > 0) {
-      setForm((prev) => ({ ...prev, categoryId: categories[0].id }))
+  const getInitialCategoryId = () => {
+    if (item?.category_id) return item.category_id
+    if (item?.category_name && categories.length > 0) {
+      const found = categories.find((c) => c.name.toLowerCase() === item.category_name.toLowerCase())
+      if (found) return found.id
     }
-  }, [categories])
+    return categories.length > 0 ? categories[0].id : ''
+  }
+
+  const [form, setForm] = useState({
+    name: item?.name || '',
+    categoryId: getInitialCategoryId(),
+    rentalPrice: item?.rental_price || '',
+    stock: item?.stock ?? 1,
+    deposit: item?.deposit !== undefined && item?.deposit !== null ? String(item.deposit) : '',
+    description: item?.description || '',
+    isPublished: item ? Boolean(item.is_published) : true
+  })
+  const [rentalKit, setRentalKit] = useState(
+    Array.isArray(item?.rental_kit) ? [...item.rental_kit] : []
+  )
   const [newFiles, setNewFiles] = useState([])
   const [newPreviews, setNewPreviews] = useState([])
   const [existingImages, setExistingImages] = useState(item?.images || [])
   const [deleteImageIds, setDeleteImageIds] = useState([])
   const [primaryImageId, setPrimaryImageId] = useState(item?.images?.find((i) => i.is_primary)?.id || null)
   const [primaryNewIndex, setPrimaryNewIndex] = useState(0)
+  const objectUrlsRef = useRef([])
+
+  useEffect(() => {
+    return () => {
+      objectUrlsRef.current.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url)
+        } catch {
+          // ignore
+        }
+      })
+      objectUrlsRef.current = []
+    }
+  }, [])
 
   const handleFileSelect = (e) => {
     const selected = Array.from(e.target.files || [])
     if (!selected.length) return
+    const urls = selected.map((f) => {
+      const url = URL.createObjectURL(f)
+      objectUrlsRef.current.push(url)
+      return url
+    })
     setNewFiles((prev) => [...prev, ...selected])
-    setNewPreviews((prev) => [...prev, ...selected.map((f) => URL.createObjectURL(f))])
+    setNewPreviews((prev) => [...prev, ...urls])
   }
   const removeNewFile = (idx) => {
+    const targetUrl = newPreviews[idx]
+    if (targetUrl) {
+      try {
+        URL.revokeObjectURL(targetUrl)
+      } catch {
+        // ignore
+      }
+      objectUrlsRef.current = objectUrlsRef.current.filter((u) => u !== targetUrl)
+    }
     setNewFiles((prev) => prev.filter((_, i) => i !== idx))
     setNewPreviews((prev) => prev.filter((_, i) => i !== idx))
+    if (primaryNewIndex >= idx && primaryNewIndex > 0) {
+      setPrimaryNewIndex((prev) => Math.max(0, prev - 1))
+    }
   }
   const removeExistingImage = (id) => {
     setExistingImages((prev) => prev.filter((img) => img.id !== id))
@@ -238,12 +298,26 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
     if (primaryImageId === id) setPrimaryImageId(null)
   }
 
+  const handleAddRentalKitEntry = () => {
+    setRentalKit((prev) => [...prev, ''])
+  }
+  const handleUpdateRentalKitEntry = (index, value) => {
+    setRentalKit((prev) => prev.map((entry, idx) => (idx === index ? value : entry)))
+  }
+  const handleRemoveRentalKitEntry = (index) => {
+    setRentalKit((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
   const handleSubmit = (e) => {
     e.preventDefault()
     const fd = new FormData()
-    fd.append('name', form.name.trim()); fd.append('category_id', form.categoryId)
+    const effectiveCategoryId = form.categoryId || (categories.length > 0 ? categories[0].id : '')
+    fd.append('name', form.name.trim()); fd.append('category_id', effectiveCategoryId)
     fd.append('rental_price', form.rentalPrice); fd.append('stock', form.stock)
+    const depositVal = String(form.deposit ?? '').trim() || '0.00'
+    fd.append('deposit', depositVal)
     fd.append('description', form.description.trim()); fd.append('is_published', form.isPublished)
+    fd.append('rental_kit', JSON.stringify(rentalKit.map((s) => s.trim()).filter(Boolean)))
     newFiles.forEach((f) => fd.append('images', f))
     if (mode === 'add') { fd.append('primary_image_index', primaryNewIndex) }
     else {
@@ -271,9 +345,24 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
               <div><span className="text-gray-500 text-xs block">Category</span><span className="font-medium">{getCategoryIcon(item.category_icon)} {item.category_name}</span></div>
               <div><span className="text-gray-500 text-xs block">Rental Price</span><span className="font-bold text-[#9D4C29]">₹{item.rental_price} / day</span></div>
               <div><span className="text-gray-500 text-xs block">Stock</span><span className="font-medium">{item.stock} units</span></div>
+              <div><span className="text-gray-500 text-xs block">Deposit</span><span className="font-bold text-[#302820]">₹{item.deposit ?? 0}</span></div>
               <div><span className="text-gray-500 text-xs block">Owner</span><span className="font-medium">{item.owner_name}</span></div>
             </div>
             {item.description && <div className="pt-2 border-t border-[#f0e9e3] text-sm bg-[#faf5f0] p-2.5 rounded-lg leading-relaxed">{item.description}</div>}
+            <div className="pt-2 border-t border-[#f0e9e3]">
+              <span className="text-gray-500 text-xs block mb-1.5">What's Included in the Rental Kit ({item.rental_kit?.length || 0})</span>
+              {Array.isArray(item.rental_kit) && item.rental_kit.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {item.rental_kit.map((acc, idx) => (
+                    <span key={idx} className="inline-flex items-center gap-1 rounded-md bg-[#faf5f0] border border-[#eee3da] px-2.5 py-1 text-xs font-medium text-[#51463d]">
+                      <span className="text-emerald-600 font-bold">✓</span> {acc}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">No rental kit accessories specified for this item.</p>
+              )}
+            </div>
             <div className="pt-2 border-t border-[#f0e9e3]">
               <span className="text-gray-500 text-xs block mb-1.5">Images ({item.images?.length || 0})</span>
               <div className="grid grid-cols-4 gap-2">
@@ -301,10 +390,10 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
               <label className="block text-xs font-semibold text-[#51463d] mb-1">Item Name *</label>
               <input required autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Sony Alpha A7 III Camera" className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3.5 py-2 text-sm outline-none focus:border-[#9D4C29]" />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-[#51463d] mb-1">Category *</label>
-                <select required value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })} className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3 py-2 text-sm outline-none">
+                <select required value={form.categoryId || (categories.length > 0 ? categories[0].id : '')} onChange={(e) => setForm({ ...form, categoryId: e.target.value })} className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3 py-2 text-sm outline-none">
                   {categories.length === 0 && <option value="" disabled>Loading categories…</option>}
                   {categories.map((c) => <option key={c.id} value={c.id}>{getCategoryIcon(c.icon)} {c.name}</option>)}
                 </select>
@@ -316,6 +405,10 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
               <div>
                 <label className="block text-xs font-semibold text-[#51463d] mb-1">Stock Available *</label>
                 <input required type="number" min="0" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} placeholder="1" className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3.5 py-2 text-sm outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#51463d] mb-1">Deposit (₹)</label>
+                <input type="number" step="0.01" min="0" value={form.deposit ?? ''} onChange={(e) => setForm({ ...form, deposit: e.target.value })} placeholder="0.00" className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3.5 py-2 text-sm outline-none focus:border-[#9D4C29]" />
               </div>
             </div>
             <div>
@@ -349,6 +442,49 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
                       {mode === 'add' && (
                         <button type="button" onClick={() => setPrimaryNewIndex(idx)} className={`absolute bottom-1 left-1 p-0.5 rounded text-[9px] font-bold flex items-center ${primaryNewIndex === idx ? 'bg-[#9D4C29] text-white' : 'bg-black/60 text-white'}`}><Star size={9} fill={primaryNewIndex === idx ? 'currentColor' : 'none'} /> {primaryNewIndex === idx ? 'Cover' : 'Set'}</button>
                       )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* What's Included in the Rental Kit? */}
+            <div className="pt-1">
+              <div className="flex items-center justify-between mb-1.5">
+                <div>
+                  <label className="text-xs font-semibold text-[#51463d] block">What's Included in the Rental Kit? (optional)</label>
+                  <span className="text-[11px] text-gray-400">Add accessories included with this item (e.g. Lens, Battery, Charger)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddRentalKitEntry}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[#9D4C29] hover:text-[#813d21] bg-[#FFF0E7]/60 hover:bg-[#FFF0E7] px-2.5 py-1 rounded-md transition cursor-pointer"
+                >
+                  <Plus size={13} /> Add Item
+                </button>
+              </div>
+              {rentalKit.length === 0 ? (
+                <div className="p-3 rounded-lg border border-dashed border-[#e5d9cf] bg-[#faf5f0]/40 text-center text-xs text-gray-400">
+                  No accessories added yet. Click &quot;+ Add Item&quot; to specify rental kit contents.
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 max-h-36 overflow-y-auto p-1">
+                  {rentalKit.map((entry, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={entry}
+                        onChange={(e) => handleUpdateRentalKitEntry(idx, e.target.value)}
+                        placeholder="e.g. 50mm f/1.8 Lens, 2x Battery, Charger"
+                        className="flex-1 rounded-lg border border-[#e5d9cf] bg-white px-3 py-1.5 text-xs outline-none focus:border-[#9D4C29]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveRentalKitEntry(idx)}
+                        className="p-1.5 rounded-md border border-[#e5d9cf] text-gray-400 hover:text-red-600 hover:border-red-200 transition cursor-pointer"
+                        title="Remove accessory"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     </div>
                   ))}
                 </div>

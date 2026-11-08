@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 
 import Home from './Pages/Home'
 import Browse from './Pages/Browse'
+import ItemDetails from './Pages/ItemDetails'
+import RequestBooking from './Pages/RequestBooking'
 import Signup from './Pages/Signup'
 import Login from './Pages/Login'
 import ForgetPassword from './Pages/ForgetPassword'
@@ -24,6 +26,8 @@ function App() {
         {/* Public Routes */}
         <Route path="/" element={<Home />} />
         <Route path="/browse" element={<Browse />} />
+        <Route path="/items/:id" element={<ItemDetails />} />
+        <Route path="/request-booking/:id" element={<RequestBooking />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/login" element={<Login />} />
         <Route path="/forget-password" element={<ForgetPassword />} />

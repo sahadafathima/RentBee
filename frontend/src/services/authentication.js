@@ -138,14 +138,15 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
     console.error('Network/CORS error:', error)
 
     throw new Error(
-      'Cannot connect to the backend. Check Django server and CORS settings.'
+      'Cannot connect to the backend. Check Django server and CORS settings.',
+      { cause: error }
     )
   }
 
  
   const text = await response.text()
 
-  let data = {}
+  let data
 
   try {
     data = text ? JSON.parse(text) : {}
@@ -189,7 +190,8 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
       )
 
       throw new Error(
-        'Your session has expired. Please login again.'
+        'Your session has expired. Please login again.',
+        { cause: error }
       )
     }
   }

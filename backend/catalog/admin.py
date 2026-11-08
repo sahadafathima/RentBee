@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category, Item, ItemImage
+from .models import Category, Item, ItemImage, RentalKitItem
 
 
 @admin.register(Category)
@@ -15,10 +15,15 @@ class ItemImageInline(admin.TabularInline):
     extra = 1
 
 
+class RentalKitItemInline(admin.TabularInline):
+    model = RentalKitItem
+    extra = 1
+
+
 @admin.register(Item)
 class ItemAdmin(admin.ModelAdmin):
-    list_display = ['name', 'category', 'rental_price', 'stock', 'is_published', 'is_deleted', 'created_at']
+    list_display = ['name', 'category', 'rental_price', 'stock', 'deposit', 'is_published', 'is_deleted', 'created_at']
     list_filter = ['is_published', 'is_deleted', 'category']
     search_fields = ['name', 'slug', 'description']
     readonly_fields = ['slug', 'created_at', 'updated_at']
-    inlines = [ItemImageInline]
+    inlines = [ItemImageInline, RentalKitItemInline]

@@ -66,12 +66,15 @@ class ItemImageSerializer(serializers.ModelSerializer):
 class ItemSerializer(serializers.ModelSerializer):
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.filter(is_deleted=False, is_active=True),
-        source='category',
-        write_only=True
+        source='category'
     )
     category_name = serializers.CharField(source='category.name', read_only=True)
     category_icon = serializers.CharField(source='category.icon', read_only=True)
     owner_name = serializers.SerializerMethodField()
+    owner_details = serializers.SerializerMethodField()
+    is_available = serializers.SerializerMethodField()
+    rental_kit = serializers.SerializerMethodField()
+    deposit = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     images = ItemImageSerializer(many=True, read_only=True)
     primary_image_url = serializers.SerializerMethodField()
 
@@ -79,11 +82,35 @@ class ItemSerializer(serializers.ModelSerializer):
         model = Item
         fields = [
             'id', 'name', 'slug', 'description', 'category_id', 'category_name',
-            'category_icon', 'owner', 'owner_name', 'rental_price', 'stock',
-            'is_published', 'is_deleted', 'images', 'primary_image_url',
-            'created_at', 'updated_at'
+            'category_icon', 'owner', 'owner_name', 'owner_details', 'rental_price',
+            'stock', 'deposit', 'rental_kit', 'is_available', 'is_published', 'is_deleted',
+            'images', 'primary_image_url', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'slug', 'owner', 'created_at', 'updated_at', 'is_deleted']
+
+    def get_rental_kit(self, obj):
+        return list(obj.rental_kit_items.values_list('name', flat=True))
+
+    def get_is_available(self, obj):
+        return bool(obj.stock and obj.stock > 0)
+
+    def get_owner_details(self, obj):
+        if not obj.owner:
+            return {
+                'name': 'RentBee Lender',
+                'locality': '',
+                'nearest_location': '',
+                'city': '',
+                'state': '',
+            }
+        addr = obj.owner.addresses.first()
+        return {
+            'name': getattr(obj.owner, 'full_name', None) or obj.owner.email.split('@')[0],
+            'locality': addr.area if addr else '',
+            'nearest_location': addr.landmark if addr else '',
+            'city': addr.city if addr else '',
+            'state': addr.state if addr else '',
+        }
 
     def get_primary_image_url(self, obj):
         images = list(obj.images.all())
@@ -102,6 +129,18 @@ class ItemSerializer(serializers.ModelSerializer):
             return getattr(obj.owner, 'full_name', None) or obj.owner.email
         return 'Admin'
 
+    def to_internal_value(self, data):
+        # Handle mutable copy if QueryDict from multipart form data
+        if hasattr(data, '_mutable'):
+            data._mutable = True
+        elif hasattr(data, 'copy'):
+            data = data.copy()
+        if 'deposit' in data:
+            val = data.get('deposit')
+            if val is None or val == '' or (isinstance(val, str) and val.strip() == ''):
+                data['deposit'] = '0.00'
+        return super().to_internal_value(data)
+
     def validate_name(self, value):
         name = value.strip()
         if not name:
@@ -116,4 +155,9 @@ class ItemSerializer(serializers.ModelSerializer):
     def validate_stock(self, value):
         if value < 0:
             raise serializers.ValidationError('Stock quantity cannot be negative.')
+        return value
+
+    def validate_deposit(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('Deposit amount cannot be negative.')
         return value

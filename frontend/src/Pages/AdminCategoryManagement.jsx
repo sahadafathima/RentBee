@@ -28,6 +28,7 @@ const LEGACY_ICON_MAP = {
   sports_soccer: '🏸',
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function getCategoryIcon(icon) {
   return LEGACY_ICON_MAP[icon] || icon || '📦'
 }
@@ -44,46 +45,58 @@ export default function AdminCategoryManagement() {
   const [modal, setModal] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [modalError, setModalError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
 
   const notify = (msg) => {
     setToast(msg)
     setTimeout(() => setToast(''), 3500)
   }
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      const data = await getAdminCategories({ search, sort })
-      const list = data.results || []
-      setCategories(list)
-      if (data.stats) {
-        setArchivedCount(data.stats.archived || 0)
-        if (data.stats.total_items !== undefined) {
-          setTotalItemsCount(data.stats.total_items)
-        }
+  const applyCategoryData = (data) => {
+    const list = data.results || []
+    setCategories(list)
+    if (data.stats) {
+      setArchivedCount(data.stats.archived || 0)
+      if (data.stats.total_items !== undefined) {
+        setTotalItemsCount(data.stats.total_items)
       }
-      if (data.used_icons) {
-        setUsedIcons(data.used_icons)
-      } else {
-        setUsedIcons(list.filter((c) => c.is_active).map((c) => c.icon))
-      }
-    } catch (err) {
-      notify(err.message || 'Failed to load categories.')
-    } finally {
-      setLoading(false)
+    }
+    if (data.used_icons) {
+      setUsedIcons(data.used_icons)
+    } else {
+      setUsedIcons(list.filter((c) => c.is_active).map((c) => c.icon))
     }
   }
 
   useEffect(() => {
-    load()
-    const handleItemsChanged = () => load()
-    window.addEventListener('rentbee:items_changed', handleItemsChanged)
-    window.addEventListener('focus', handleItemsChanged)
-    return () => {
-      window.removeEventListener('rentbee:items_changed', handleItemsChanged)
-      window.removeEventListener('focus', handleItemsChanged)
+    let isCurrent = true
+    getAdminCategories({ search, sort })
+      .then((data) => {
+        if (isCurrent) applyCategoryData(data)
+      })
+      .catch((err) => {
+        if (isCurrent) notify(err.message || 'Failed to load categories.')
+      })
+      .finally(() => {
+        if (isCurrent) setLoading(false)
+      })
+
+    const handleRefresh = () => {
+      getAdminCategories({ search, sort })
+        .then((data) => {
+          if (isCurrent) applyCategoryData(data)
+        })
+        .catch(() => {})
     }
-  }, [search, sort])
+
+    window.addEventListener('rentbee:items_changed', handleRefresh)
+    window.addEventListener('focus', handleRefresh)
+    return () => {
+      isCurrent = false
+      window.removeEventListener('rentbee:items_changed', handleRefresh)
+      window.removeEventListener('focus', handleRefresh)
+    }
+  }, [search, sort, reloadToken])
 
   const handleSave = async (payload) => {
     setSubmitting(true)
@@ -100,7 +113,8 @@ export default function AdminCategoryManagement() {
         notify(`Category "${modal.cat.name}" soft-deleted.`)
       }
       setModal(null)
-      load()
+      setReloadToken((t) => t + 1)
+      window.dispatchEvent(new CustomEvent('rentbee:items_changed'))
     } catch (err) {
       setModalError(err.message || 'Operation failed.')
       notify(err.message || 'Error occurred.')

@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 
 from admin_panel.permissions import IsAdminUser
 from .image_utils import process_item_image
-from .models import Category, Item, ItemImage
+from .models import Category, Item, ItemImage, RentalKitItem
 from .serializers import CategorySerializer, ItemSerializer
 
 
@@ -95,7 +95,7 @@ class AdminItemListCreateView(APIView):
 
         sort = self.request.query_params.get('sort', '-created_at')
         allowed_sorts = {'-created_at', 'created_at', 'name', '-name', 'rental_price', '-rental_price', 'stock', '-stock'}
-        return qs.select_related('category', 'owner').prefetch_related('images').order_by(sort if sort in allowed_sorts else '-created_at')
+        return qs.select_related('category', 'owner').prefetch_related('images', 'rental_kit_items').order_by(sort if sort in allowed_sorts else '-created_at')
 
     def get(self, request):
         qs = self.get_queryset()
@@ -154,6 +154,25 @@ class AdminItemListCreateView(APIView):
                 first_img.is_primary = True
                 first_img.save(update_fields=['is_primary'])
 
+        # Process rental kit entries if provided
+        rental_kit_raw = request.data.get('rental_kit')
+        if rental_kit_raw is not None:
+            if isinstance(rental_kit_raw, str):
+                try:
+                    rental_kit_entries = json.loads(rental_kit_raw)
+                except Exception:
+                    rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
+            elif isinstance(rental_kit_raw, list):
+                rental_kit_entries = rental_kit_raw
+            else:
+                rental_kit_entries = []
+
+            for entry in rental_kit_entries:
+                if isinstance(entry, str) and entry.strip():
+                    RentalKitItem.objects.create(item=item, name=entry.strip())
+                elif isinstance(entry, dict) and entry.get('name', '').strip():
+                    RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+
         return Response(ItemSerializer(item, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -161,7 +180,7 @@ class AdminItemDetailView(APIView):
     permission_classes = [IsAdminUser]
 
     def get_object(self, pk):
-        return get_object_or_404(Item.objects.select_related('category', 'owner').prefetch_related('images'), pk=pk)
+        return get_object_or_404(Item.objects.select_related('category', 'owner').prefetch_related('images', 'rental_kit_items'), pk=pk)
 
     def get(self, request, pk):
         item = self.get_object(pk)
@@ -204,6 +223,26 @@ class AdminItemDetailView(APIView):
             first_img.is_primary = True
             first_img.save(update_fields=['is_primary'])
 
+        # Process rental kit entries if explicitly provided
+        if 'rental_kit' in request.data:
+            rental_kit_raw = request.data.get('rental_kit')
+            if isinstance(rental_kit_raw, str):
+                try:
+                    rental_kit_entries = json.loads(rental_kit_raw)
+                except Exception:
+                    rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
+            elif isinstance(rental_kit_raw, list):
+                rental_kit_entries = rental_kit_raw
+            else:
+                rental_kit_entries = []
+
+            item.rental_kit_items.all().delete()
+            for entry in rental_kit_entries:
+                if isinstance(entry, str) and entry.strip():
+                    RentalKitItem.objects.create(item=item, name=entry.strip())
+                elif isinstance(entry, dict) and entry.get('name', '').strip():
+                    RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+
         return Response(ItemSerializer(item, context={'request': request}).data)
 
 
@@ -226,17 +265,46 @@ class PublicItemListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = Item.objects.filter(is_deleted=False, is_published=True).select_related('category', 'owner').prefetch_related('images')
+        qs = Item.objects.filter(
+            is_deleted=False,
+            is_published=True,
+            category__is_active=True,
+            category__is_deleted=False
+        ).filter(
+            Q(owner__isnull=True) | Q(owner__is_active=True)
+        ).select_related('category', 'owner').prefetch_related('images', 'owner__addresses', 'rental_kit_items')
 
         if category_id := request.query_params.get('category'):
             if category_id.isdigit():
                 qs = qs.filter(category_id=int(category_id))
 
         if search := request.query_params.get('search'):
-            qs = qs.filter(Q(name__icontains=search) | Q(description__icontains=search))
+            search = search.strip()
+            if search:
+                qs = qs.filter(Q(name__icontains=search) | Q(description__icontains=search))
+
+        if min_price := request.query_params.get('min_price'):
+            try:
+                qs = qs.filter(rental_price__gte=float(min_price))
+            except (ValueError, TypeError):
+                pass
+
+        if max_price := request.query_params.get('max_price'):
+            try:
+                qs = qs.filter(rental_price__lte=float(max_price))
+            except (ValueError, TypeError):
+                pass
+
+        if owner_id := request.query_params.get('owner'):
+            if owner_id.isdigit():
+                qs = qs.filter(owner_id=int(owner_id))
+
+        if exclude_id := request.query_params.get('exclude'):
+            if exclude_id.isdigit():
+                qs = qs.exclude(id=int(exclude_id))
 
         sort = request.query_params.get('sort', '-created_at')
-        allowed_sorts = {'-created_at', 'created_at', 'name', 'rental_price', '-rental_price'}
+        allowed_sorts = {'-created_at', 'rental_price', '-rental_price'}
         qs = qs.order_by(sort if sort in allowed_sorts else '-created_at')
 
         try:
@@ -265,10 +333,15 @@ class PublicItemDetailView(APIView):
 
     def get(self, request, pk):
         item = get_object_or_404(
-            Item.objects.select_related('category', 'owner').prefetch_related('images'),
-            pk=pk,
-            is_deleted=False,
-            is_published=True
+            Item.objects.filter(
+                is_deleted=False,
+                is_published=True,
+                category__is_active=True,
+                category__is_deleted=False
+            ).filter(
+                Q(owner__isnull=True) | Q(owner__is_active=True)
+            ).select_related('category', 'owner').prefetch_related('images', 'owner__addresses', 'rental_kit_items'),
+            pk=pk
         )
         return Response(ItemSerializer(item, context={'request': request}).data)
 

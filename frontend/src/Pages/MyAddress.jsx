@@ -28,27 +28,32 @@ function MyAddress() {
   const [isSaving, setIsSaving] = useState(false)
   const [successMessage, setSuccessMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
-
-  const fetchAddressData = async () => {
-    try {
-      setLoading(true)
-      const [profileData, addressesData] = await Promise.all([
-        getUserProfile().catch(() => null),
-        getAddresses().catch(() => []),
-      ])
-      setUserProfile(profileData)
-      const list = Array.isArray(addressesData) ? addressesData : (addressesData?.results || [])
-      setAddresses(list)
-    } catch (err) {
-      setErrorMessage(err.message || 'Unable to load address book.')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const [reloadToken, setReloadToken] = useState(0)
 
   useEffect(() => {
-    fetchAddressData()
-  }, [])
+    let isCurrent = true
+    Promise.all([
+      getUserProfile().catch(() => null),
+      getAddresses().catch(() => []),
+    ])
+      .then(([profileData, addressesData]) => {
+        if (!isCurrent) return
+        setUserProfile(profileData)
+        const list = Array.isArray(addressesData) ? addressesData : (addressesData?.results || [])
+        setAddresses(list)
+      })
+      .catch((err) => {
+        if (!isCurrent) return
+        setErrorMessage(err.message || 'Unable to load address book.')
+      })
+      .finally(() => {
+        if (isCurrent) setLoading(false)
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [reloadToken])
 
   const handleStartAdd = () => {
     setFormData({
@@ -85,7 +90,7 @@ function MyAddress() {
     try {
       await deleteAddress(addrId)
       setSuccessMessage('Address removed successfully.')
-      await fetchAddressData()
+      setReloadToken((t) => t + 1)
     } catch (err) {
       setErrorMessage(err.message || 'Failed to delete address.')
     }
@@ -112,7 +117,7 @@ function MyAddress() {
       }
       setShowForm(false)
       setEditingId(null)
-      await fetchAddressData()
+      setReloadToken((t) => t + 1)
     } catch (err) {
       setErrorMessage(err.message || 'Unable to save address.')
     } finally {
