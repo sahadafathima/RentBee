@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getPublicItems } from '../services/api'
 import { Package } from 'lucide-react'
+import WishlistHeartButton from './WishlistHeartButton'
 
 function PopularRentals({ selectedCategory = '' }) {
   const [items, setItems] = useState([])
@@ -105,13 +106,9 @@ function PopularRentals({ selectedCategory = '' }) {
                     className="h-48 w-full object-cover bg-orange-50"
                   />
 
-                  <button
-                    type="button"
-                    aria-label={`Add ${item.name} to wishlist`}
-                    className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white text-base text-[#9D4C29] shadow-xs hover:bg-orange-50 transition"
-                  >
-                    ♡
-                  </button>
+                  <div className="absolute right-3 top-3">
+                    <WishlistHeartButton item={item} />
+                  </div>
                 </div>
 
                 {/* Product details */}

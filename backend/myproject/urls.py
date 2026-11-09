@@ -13,6 +13,8 @@ urlpatterns = [
     path('api/admin/categories/', include('catalog.urls')),
     path('api/admin/items/', include('catalog.item_urls')),
     path('api/items/', include('catalog.public_urls')),
+    path('api/wishlist/', include('catalog.wishlist_urls')),
+    path('api/bookings/', include('bookings.urls')),
     path('api/admin/', include('admin_panel.urls')),
 ]
 

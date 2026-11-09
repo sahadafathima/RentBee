@@ -1,8 +1,16 @@
 import { useEffect, useState, useMemo } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import Navbar from '../Components/Navbar'
 import Footer from '../Components/Footer'
-import { getPublicItem, getPublicItems } from '../services/api'
+import WishlistHeartButton from '../Components/WishlistHeartButton'
+import {
+  getPublicItem,
+  getPublicItems,
+  checkItemAvailability,
+  requestAvailabilityNotification,
+} from '../services/api'
+import { calculateRentalDuration, getNextDayStr } from '../utils/dateUtils'
+import { getAccessToken } from '../services/authentication'
 import {
   ChevronRight,
   ShieldCheck,
@@ -16,6 +24,7 @@ import {
   AlertCircle,
   RefreshCw,
   Info,
+  CheckCircle2,
 } from 'lucide-react'
 
 // Normalizes image URLs whether absolute or relative to backend media host
@@ -40,8 +49,23 @@ export default function ItemDetails() {
   const [selectedImage, setSelectedImage] = useState(null)
   const [lightboxOpen, setLightboxOpen] = useState(false)
 
-  // Modal / notification states
-  const [showNotifyModal, setShowNotifyModal] = useState(false)
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], [])
+
+  // Rental date selection - do NOT default to today if user has not selected dates
+  const [startDate, setStartDate] = useState(() => searchParams.get('start_date') || '')
+  const [endDate, setEndDate] = useState(() => searchParams.get('end_date') || '')
+
+  // Real-time availability check state
+  const [checkingAvailability, setCheckingAvailability] = useState(false)
+  const [availabilityResult, setAvailabilityResult] = useState(null)
+
+  // Notification request state
+  const [notifying, setNotifying] = useState(false)
+  const [notifySuccess, setNotifySuccess] = useState(false)
+  const [notifyMessage, setNotifyMessage] = useState('')
+  const [notifyError, setNotifyError] = useState('')
 
   // Recommendation sections data
   const [relatedItems, setRelatedItems] = useState([])
@@ -108,17 +132,17 @@ export default function ItemDetails() {
     const promises = [
       item.category_id
         ? getPublicItems({
-            category: item.category_id,
-            exclude: item.id,
-            page_size: 4,
-          })
+          category: item.category_id,
+          exclude: item.id,
+          page_size: 4,
+        })
         : Promise.resolve({ results: [] }),
       item.owner
         ? getPublicItems({
-            owner: item.owner,
-            exclude: item.id,
-            page_size: 4,
-          })
+          owner: item.owner,
+          exclude: item.id,
+          page_size: 4,
+        })
         : Promise.resolve({ results: [] }),
       getPublicItems({
         exclude: item.id,
@@ -156,6 +180,105 @@ export default function ItemDetails() {
       isCurrent = false
     }
   }, [item?.id, item?.category_id, item?.owner])
+
+  const hasSelectedDates = Boolean(startDate && endDate)
+  const isDateRangeInvalid = hasSelectedDates && endDate <= startDate
+
+  // Real-time availability check when dates are provided
+  useEffect(() => {
+    if (!item?.id || !startDate || !endDate || endDate <= startDate) {
+      return
+    }
+
+    let isCurrent = true
+    queueMicrotask(() => {
+      if (isCurrent) setCheckingAvailability(true)
+    })
+
+    checkItemAvailability(item.id, startDate, endDate)
+      .then((data) => {
+        if (!isCurrent) return
+        setAvailabilityResult(data)
+      })
+      .catch((err) => {
+        if (!isCurrent) return
+        setAvailabilityResult({
+          is_available: false,
+          status_label: 'Unavailable',
+          message: err.message || 'Could not verify availability for these dates.',
+        })
+      })
+      .finally(() => {
+        if (isCurrent) setCheckingAvailability(false)
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [item?.id, startDate, endDate])
+
+  const activeAvailabilityResult =
+    hasSelectedDates && !isDateRangeInvalid ? availabilityResult : null
+
+  // Effective availability & status label
+  const isAvailable = useMemo(() => {
+    if (isDateRangeInvalid) return false
+    if (activeAvailabilityResult) return Boolean(activeAvailabilityResult.is_available)
+    return Boolean(item?.stock > 0 && item?.is_available !== false)
+  }, [isDateRangeInvalid, activeAvailabilityResult, item])
+
+  const statusLabel = useMemo(() => {
+    if (isDateRangeInvalid) return 'Invalid Dates'
+    if (activeAvailabilityResult) {
+      return activeAvailabilityResult.is_available ? 'Available' : 'Booked'
+    }
+    return item?.stock > 0 && item?.is_available !== false ? 'Available to Rent' : 'Booked'
+  }, [isDateRangeInvalid, activeAvailabilityResult, item])
+
+  // Calculation (difference in calendar days, return date not counted as extra rental day)
+  const durationDays = useMemo(() => {
+    return calculateRentalDuration(startDate, endDate)
+  }, [startDate, endDate])
+
+  const rentalPrice = item ? parseFloat(item.rental_price || 0) : 0
+
+  // Handle Notify Me registration
+  const handleNotifyMe = async () => {
+    setNotifyError('')
+    setNotifyMessage('')
+
+    if (!startDate || !endDate) {
+      setNotifyError('Please select start and end dates below to receive an availability alert.')
+      return
+    }
+    if (endDate <= startDate) {
+      setNotifyError('End date must be after start date.')
+      return
+    }
+
+    const token = getAccessToken()
+    if (!token) {
+      const redirectUrl = `/items/${item?.id}?start_date=${startDate}&end_date=${endDate}`
+      sessionStorage.setItem('rentbee_redirect_after_login', redirectUrl)
+      navigate('/login')
+      return
+    }
+
+    setNotifying(true)
+    try {
+      const res = await requestAvailabilityNotification(item.id, startDate, endDate)
+      setNotifySuccess(true)
+      setNotifyMessage(
+        res?.message || 'You will be notified as soon as these dates become available.'
+      )
+    } catch (err) {
+      setNotifyError(err.message || 'Failed to register notification request.')
+    } finally {
+      setNotifying(false)
+    }
+  }
+
+  const ownerDetails = item?.owner_details || {}
 
   if (loading) {
     return (
@@ -223,9 +346,6 @@ export default function ItemDetails() {
       </div>
     )
   }
-
-  const isAvailable = item.stock > 0
-  const ownerDetails = item.owner_details || {}
 
   return (
     <div className="min-h-screen bg-[#FFFCF9] flex flex-col justify-between">
@@ -324,11 +444,10 @@ export default function ItemDetails() {
                         type="button"
                         onClick={() => setSelectedImage(imgUrl)}
                         aria-label={`View image thumbnail ${index + 1}`}
-                        className={`h-20 w-20 shrink-0 overflow-hidden rounded-2xl border-2 transition cursor-pointer ${
-                          isSelected
+                        className={`h-20 w-20 shrink-0 overflow-hidden rounded-2xl border-2 transition cursor-pointer ${isSelected
                             ? 'border-[#D97745] shadow-xs scale-102 ring-2 ring-[#D97745]/20'
                             : 'border-orange-100 bg-white hover:border-orange-300 opacity-80 hover:opacity-100'
-                        }`}
+                          }`}
                       >
                         <img
                           src={imgUrl}
@@ -393,11 +512,11 @@ export default function ItemDetails() {
 
                   {isAvailable ? (
                     <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-700 border border-emerald-200">
-                      Available to Rent
+                      ● {statusLabel}
                     </span>
                   ) : (
                     <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-bold text-[#D97745] border border-orange-200">
-                      Currently Booked
+                      ● {statusLabel}
                     </span>
                   )}
                 </div>
@@ -433,12 +552,110 @@ export default function ItemDetails() {
                   </div>
                 </div>
 
-                {/* CTAs: Rent Now (if Available) OR Notify Me (if Booked) */}
-                <div className="mt-6 flex flex-col gap-3">
+                {/* Rental Date Selection */}
+                <div className="mt-4 rounded-2xl bg-[#FFF9F5] border border-orange-100 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-[#352720]">
+                      <Calendar size={14} className="text-[#D97745]" />
+                      <span>Rental Dates</span>
+                    </div>
+                    {checkingAvailability && (
+                      <span className="text-[11px] text-gray-500 animate-pulse">Checking availability...</span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-gray-600 mb-1">Start Date</label>
+                      <input
+                        type="date"
+                        min={todayStr}
+                        value={startDate}
+                        onChange={(e) => {
+                          setStartDate(e.target.value)
+                          setAvailabilityResult(null)
+                          setNotifySuccess(false)
+                          setNotifyMessage('')
+                          setNotifyError('')
+                          if (endDate && e.target.value >= endDate) {
+                            setEndDate(getNextDayStr(e.target.value))
+                          }
+                        }}
+                        className="w-full rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-xs text-[#352720] outline-none focus:border-[#D97745]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-gray-600 mb-1">End Date</label>
+                      <input
+                        type="date"
+                        min={getNextDayStr(startDate) || todayStr}
+                        value={endDate}
+                        onChange={(e) => {
+                          setEndDate(e.target.value)
+                          setAvailabilityResult(null)
+                          setNotifySuccess(false)
+                          setNotifyMessage('')
+                          setNotifyError('')
+                        }}
+                        className="w-full rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-xs text-[#352720] outline-none focus:border-[#D97745]"
+                      />
+                    </div>
+                  </div>
+
+                  {hasSelectedDates && !isDateRangeInvalid && (
+                    <div className="mt-2.5 pt-2 border-t border-orange-100 flex items-center justify-between text-xs">
+                      <span className="text-gray-500">
+                        Duration: <strong className="text-[#352720]">{durationDays} day(s)</strong>
+                      </span>
+                      <span className="text-gray-500">
+                        Estimated Total: <strong className="text-[#9D4C29]">₹{(rentalPrice * durationDays).toFixed(2)}</strong>
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Availability Status Feedback */}
+                  {activeAvailabilityResult && !activeAvailabilityResult.is_available && (
+                    <div className="mt-2.5 rounded-xl bg-orange-100/70 border border-orange-200 p-2.5 text-xs text-[#7A4C32] flex items-start gap-2">
+                      <AlertCircle size={15} className="text-[#D97745] shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-[#352720]">Booked for Selected Dates</p>
+                        <p className="mt-0.5 text-gray-600">
+                          {activeAvailabilityResult.message || 'This item is already booked or reserved for these dates. Click Notify Me below to get an alert when it opens up.'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {notifyError && (
+                    <p className="mt-2 text-xs font-semibold text-rose-600 flex items-center gap-1.5">
+                      <AlertCircle size={13} /> {notifyError}
+                    </p>
+                  )}
+
+                  {notifySuccess && (
+                    <div className="mt-2.5 rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800 flex items-start gap-2">
+                      <CheckCircle2 size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-emerald-900">Notification Request Registered!</p>
+                        <p className="mt-0.5 text-emerald-700">
+                          {notifyMessage || "We'll notify you as soon as these dates become available."}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* CTAs: Rent Now (if Available) OR Notify Me (if Booked) + Wishlist Button */}
+                <div className="mt-6 flex items-center gap-3">
                   {isAvailable ? (
                     <Link
-                      to={`/request-booking/${item.id}`}
-                      className="flex items-center justify-center gap-2 w-full rounded-2xl bg-[#D97745] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#B85D32] active:scale-[0.99] cursor-pointer"
+                      to={
+                        hasSelectedDates
+                          ? `/request-booking/${item.id}?start_date=${startDate}&end_date=${endDate}`
+                          : `/request-booking/${item.id}`
+                      }
+                      className="flex items-center justify-center gap-2 flex-1 rounded-2xl bg-[#D97745] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#B85D32] active:scale-[0.99] cursor-pointer"
                     >
                       <Sparkles size={16} />
                       <span>Rent Now</span>
@@ -446,13 +663,26 @@ export default function ItemDetails() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setShowNotifyModal(true)}
-                      className="flex items-center justify-center gap-2 w-full rounded-2xl border border-orange-200 bg-[#FFF0E7] px-6 py-3.5 text-sm font-bold text-[#D97745] shadow-xs transition hover:bg-[#FFE3D1] active:scale-[0.99] cursor-pointer"
+                      onClick={handleNotifyMe}
+                      disabled={notifying || notifySuccess}
+                      className="flex items-center justify-center gap-2 flex-1 rounded-2xl border border-orange-200 bg-[#FFF0E7] px-6 py-3.5 text-sm font-bold text-[#D97745] shadow-xs transition hover:bg-[#FFE3D1] active:scale-[0.99] cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
                     >
                       <Bell size={16} />
-                      <span>Notify Me When Available</span>
+                      <span>
+                        {notifySuccess
+                          ? 'Notification Request Registered'
+                          : notifying
+                            ? 'Registering...'
+                            : 'Notify Me When Available'}
+                      </span>
                     </button>
                   )}
+
+                  <WishlistHeartButton
+                    item={item}
+                    size={18}
+                    className="h-12 w-12 rounded-2xl border border-orange-200 bg-white"
+                  />
                 </div>
 
                 {/* Trust Badges */}
@@ -679,57 +909,6 @@ export default function ItemDetails() {
         </div>
       )}
 
-      {/* Notify Me Dependency Modal (Honest transparent notice, no fake success) */}
-      {showNotifyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl border border-orange-100">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-2.5 text-[#D97745]">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-orange-100">
-                  <Bell size={20} />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-[#352720]">Notify When Available</h3>
-                  <p className="text-xs text-gray-500">Subscription Status</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowNotifyModal(false)}
-                className="text-gray-400 hover:text-gray-600 p-1 cursor-pointer"
-                aria-label="Close modal"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="mt-4">
-              <p className="text-xs font-bold text-[#D97745] uppercase tracking-wider">
-                {item.name}
-              </p>
-              <div className="mt-3 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-xs text-amber-900 leading-relaxed">
-                <strong>Pending Backend Feature:</strong>
-                <p className="mt-1 text-amber-800">
-                  The notification subscription database and automated return-confirmation triggers
-                  are currently pending backend integration. You will be able to register for real
-                  instant alerts once the notification engine is connected!
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-6 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowNotifyModal(false)}
-                className="rounded-xl bg-[#352720] px-5 py-2.5 text-xs font-semibold text-white hover:bg-black transition cursor-pointer"
-              >
-                Got It
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <Footer />
     </div>
   )
@@ -737,7 +916,7 @@ export default function ItemDetails() {
 
 // Reusable recommendation card for Related Items, More from Owner, and You May Also Like
 function ItemRecommendationCard({ item }) {
-  const isAvailable = item.stock > 0
+  const isAvailable = item?.is_available !== undefined ? item.is_available : (item?.stock ?? 0) > 0
 
   return (
     <article className="group flex flex-col justify-between overflow-hidden rounded-2xl border border-orange-100 bg-white shadow-xs transition duration-200 hover:-translate-y-1 hover:shadow-md">
@@ -762,6 +941,10 @@ function ItemRecommendationCard({ item }) {
               ● Booked
             </span>
           )}
+        </div>
+
+        <div className="absolute right-2.5 top-2.5">
+          <WishlistHeartButton item={item} size={14} className="h-7 w-7" />
         </div>
       </div>
 

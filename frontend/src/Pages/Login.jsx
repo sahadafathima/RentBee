@@ -1,6 +1,6 @@
 
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import InputField from '../Components/InputField'
 import Button from '../Components/Button'
 import { userLogin, saveAuthTokens } from '../services/authentication'
@@ -8,6 +8,8 @@ import logo from '../assets/rentbee_logo.png'
 
 function Login() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const isSessionExpired = searchParams.get('session') === 'expired'
 
   const [formData, setFormData] = useState({
     email: '',
@@ -76,7 +78,13 @@ function Login() {
     setMessage('Login successful! Welcome to RentBee.')
 
     setTimeout(() => {
-      navigate('/')
+      const redirectUrl = sessionStorage.getItem('rentbee_redirect_after_login')
+      if (redirectUrl) {
+        sessionStorage.removeItem('rentbee_redirect_after_login')
+        navigate(redirectUrl)
+      } else {
+        navigate('/')
+      }
     }, 1500)
 
   } catch (error) {
@@ -122,6 +130,12 @@ const handleForgotPassword = () => {
               Log in to your RentBee account
             </p>
           </div>
+
+          {isSessionExpired && !errorMessage && (
+            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              Your session has expired. Please sign in to resume where you left off.
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <InputField

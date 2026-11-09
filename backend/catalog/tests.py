@@ -117,6 +117,33 @@ class CategoryTests(TestCase):
         self.assertEqual(tools_data["items_count"], 0)
         self.assertEqual(cameras_data["items_count"], 0)
 
+    def test_public_category_list_ordering_preserves_order_and_appends_new_at_end(self):
+        """
+        Customer-facing /api/categories/ must:
+        1. Keep all existing categories in chronological creation order.
+        2. Append newly created categories at the END of the list, regardless of alphabetical naming.
+        """
+        # Create categories in a specific order: Cameras first, then Tools
+        cat1 = Category.objects.create(name="Cameras", icon="📷", is_active=True)
+        cat2 = Category.objects.create(name="Tools", icon="🔧", is_active=True)
+
+        res = self.client.get("/api/categories/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        ids = [c["id"] for c in res.data]
+        self.assertEqual(ids, [cat1.id, cat2.id])
+
+        # Create a new category that begins with 'A' (e.g. "Audio Gear")
+        # Alphabetically this would jump to index 0, but it must be placed at the END.
+        cat3 = Category.objects.create(name="Audio Gear", icon="🎧", is_active=True)
+
+        res2 = self.client.get("/api/categories/")
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        ids2 = [c["id"] for c in res2.data]
+        # Must preserve cat1, cat2 and append cat3 at the END
+        self.assertEqual(ids2, [cat1.id, cat2.id, cat3.id])
+        self.assertEqual(res2.data[-1]["id"], cat3.id)
+        self.assertEqual(res2.data[-1]["name"], "Audio Gear")
+
 
 class ItemDepositTests(TestCase):
     def setUp(self):

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Category, Item, ItemImage
+from .models import Category, Item, ItemImage, WishlistItem
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -161,3 +161,13 @@ class ItemSerializer(serializers.ModelSerializer):
         if value is not None and value < 0:
             raise serializers.ValidationError('Deposit amount cannot be negative.')
         return value
+
+
+class WishlistItemSerializer(serializers.ModelSerializer):
+    item = ItemSerializer(read_only=True)
+
+    class Meta:
+        model = WishlistItem
+        fields = ['id', 'item', 'created_at']
+        read_only_fields = ['id', 'created_at']
+

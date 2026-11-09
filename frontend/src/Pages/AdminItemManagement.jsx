@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import AdminLayout from '../Components/AdminLayout'
+import ImageCropModal from '../Components/ImageCropModal'
 import { getAdminItems, createAdminItem, updateAdminItem, softDeleteAdminItem, getAdminCategories } from '../services/api'
 import { getCategoryIcon } from './AdminCategoryManagement'
-import { Plus, Search, X, Eye, Pencil, Trash2, Upload, Star } from 'lucide-react'
+import { Plus, Search, X, Eye, Pencil, Trash2, Upload, Star, Crop, RefreshCw } from 'lucide-react'
 
 export default function AdminItemManagement() {
   const [items, setItems] = useState([])
@@ -252,6 +253,12 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
   const [primaryNewIndex, setPrimaryNewIndex] = useState(0)
   const objectUrlsRef = useRef([])
 
+  // Image Crop & Resize Modal state
+  const [cropModalData, setCropModalData] = useState(null)
+  const replaceNewIndexRef = useRef(null)
+  const replaceExistingIdRef = useRef(null)
+  const replaceFileInputRef = useRef(null)
+
   useEffect(() => {
     return () => {
       objectUrlsRef.current.forEach((url) => {
@@ -268,14 +275,104 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
   const handleFileSelect = (e) => {
     const selected = Array.from(e.target.files || [])
     if (!selected.length) return
-    const urls = selected.map((f) => {
-      const url = URL.createObjectURL(f)
-      objectUrlsRef.current.push(url)
-      return url
-    })
-    setNewFiles((prev) => [...prev, ...selected])
-    setNewPreviews((prev) => [...prev, ...urls])
+    // Open crop & resize modal for the selected batch of images
+    setCropModalData({ files: selected, type: 'new' })
+    e.target.value = ''
   }
+
+  const handleTriggerReplaceNew = (idx) => {
+    replaceNewIndexRef.current = idx
+    replaceExistingIdRef.current = null
+    if (replaceFileInputRef.current) {
+      replaceFileInputRef.current.value = ''
+      replaceFileInputRef.current.click()
+    }
+  }
+
+  const handleRecropNewFile = (idx) => {
+    const targetFile = newFiles[idx]
+    if (!targetFile) return
+    setCropModalData({ files: [targetFile], type: 'recrop_new', replaceIndex: idx })
+  }
+
+  const handleTriggerReplaceExisting = (id) => {
+    replaceExistingIdRef.current = id
+    replaceNewIndexRef.current = null
+    if (replaceFileInputRef.current) {
+      replaceFileInputRef.current.value = ''
+      replaceFileInputRef.current.click()
+    }
+  }
+
+  const handleReplaceFileChange = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (replaceExistingIdRef.current !== null) {
+      setCropModalData({
+        files: [file],
+        type: 'replace_existing',
+        existingId: replaceExistingIdRef.current,
+      })
+    } else if (replaceNewIndexRef.current !== null) {
+      setCropModalData({
+        files: [file],
+        type: 'recrop_new',
+        replaceIndex: replaceNewIndexRef.current,
+      })
+    }
+    e.target.value = ''
+  }
+
+  const handleCropComplete = (croppedFiles) => {
+    if (!croppedFiles || !croppedFiles.length) {
+      setCropModalData(null)
+      return
+    }
+
+    if (cropModalData?.type === 'recrop_new' && cropModalData.replaceIndex !== undefined) {
+      const idx = cropModalData.replaceIndex
+      const updatedFile = croppedFiles[0]
+      const oldUrl = newPreviews[idx]
+      if (oldUrl) {
+        try {
+          URL.revokeObjectURL(oldUrl)
+        } catch {
+          // ignore
+        }
+      }
+      const newUrl = URL.createObjectURL(updatedFile)
+      objectUrlsRef.current.push(newUrl)
+
+      setNewFiles((prev) => prev.map((f, i) => (i === idx ? updatedFile : f)))
+      setNewPreviews((prev) => prev.map((u, i) => (i === idx ? newUrl : u)))
+    } else if (cropModalData?.type === 'replace_existing' && cropModalData.existingId) {
+      const existingId = cropModalData.existingId
+      removeExistingImage(existingId)
+
+      const updatedFile = croppedFiles[0]
+      const newUrl = URL.createObjectURL(updatedFile)
+      objectUrlsRef.current.push(newUrl)
+
+      setNewFiles((prev) => [...prev, updatedFile])
+      setNewPreviews((prev) => [...prev, newUrl])
+    } else {
+      const newUrls = croppedFiles.map((f) => {
+        const url = URL.createObjectURL(f)
+        objectUrlsRef.current.push(url)
+        return url
+      })
+      setNewFiles((prev) => [...prev, ...croppedFiles])
+      setNewPreviews((prev) => [...prev, ...newUrls])
+    }
+
+    setCropModalData(null)
+  }
+
+  const handleCropCancel = () => {
+    setCropModalData(null)
+  }
+
   const removeNewFile = (idx) => {
     const targetUrl = newPreviews[idx]
     if (targetUrl) {
@@ -418,27 +515,57 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-semibold text-[#51463d]">Item Images (Multiple Upload)</label>
-                <span className="text-[11px] text-gray-400">Max 1200×900 auto-resized by Pillow</span>
+                <span className="text-[11px] text-gray-400">Crop, zoom & resize enabled • Max 1200×900</span>
               </div>
               <label className="flex flex-col items-center justify-center p-3 border-2 border-dashed border-[#e5d9cf] rounded-lg bg-[#faf5f0]/60 hover:bg-[#FFF0E7]/40 cursor-pointer">
                 <Upload size={18} className="text-[#9D4C29] mb-1" />
                 <span className="text-xs font-medium text-[#302820]">Click to select one or multiple images</span>
-                <span className="text-[10px] text-gray-400 mt-0.5">JPG, PNG, WEBP (Max 5MB each)</span>
+                <span className="text-[10px] text-gray-400 mt-0.5">JPG, PNG, WEBP • Crop & resize on upload</span>
                 <input type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={handleFileSelect} className="hidden" />
               </label>
+
+              {/* Hidden file input for replacing single images */}
+              <input ref={replaceFileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleReplaceFileChange} className="hidden" />
+
               {(existingImages.length > 0 || newPreviews.length > 0) && (
                 <div className="mt-2 grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-32 overflow-y-auto p-1 bg-[#faf5f0]/40 rounded-lg">
                   {existingImages.map((img) => (
                     <div key={img.id} className={`relative rounded-lg overflow-hidden border-2 aspect-square ${primaryImageId === img.id ? 'border-[#9D4C29]' : 'border-[#eee3da]'}`}>
                       <img src={img.image} alt="Thumb" className="w-full h-full object-cover" />
-                      <button type="button" onClick={() => removeExistingImage(img.id)} className="absolute top-1 right-1 w-4 h-4 bg-red-600 text-white rounded-full flex items-center justify-center text-[10px]">✕</button>
+                      <button type="button" onClick={() => removeExistingImage(img.id)} className="absolute top-1 right-1 w-4 h-4 bg-red-600 text-white rounded-full flex items-center justify-center text-[10px]" title="Remove image">✕</button>
+                      <button
+                        type="button"
+                        onClick={() => handleTriggerReplaceExisting(img.id)}
+                        className="absolute top-1 left-1 p-1 rounded bg-black/60 hover:bg-[#9D4C29] text-white text-[9px] transition flex items-center justify-center cursor-pointer"
+                        title="Replace this image with a new cropped image"
+                      >
+                        <RefreshCw size={10} />
+                      </button>
                       <button type="button" onClick={() => setPrimaryImageId(img.id)} className={`absolute bottom-1 left-1 p-0.5 rounded text-[9px] font-bold flex items-center ${primaryImageId === img.id ? 'bg-[#9D4C29] text-white' : 'bg-black/60 text-white'}`}><Star size={9} fill={primaryImageId === img.id ? 'currentColor' : 'none'} /> {primaryImageId === img.id ? 'Cover' : 'Set'}</button>
                     </div>
                   ))}
                   {newPreviews.map((src, idx) => (
                     <div key={idx} className={`relative rounded-lg overflow-hidden border-2 aspect-square ${primaryNewIndex === idx && !primaryImageId ? 'border-[#9D4C29]' : 'border-[#eee3da]'}`}>
                       <img src={src} alt="New" className="w-full h-full object-cover" />
-                      <button type="button" onClick={() => removeNewFile(idx)} className="absolute top-1 right-1 w-4 h-4 bg-red-600 text-white rounded-full flex items-center justify-center text-[10px]">✕</button>
+                      <button type="button" onClick={() => removeNewFile(idx)} className="absolute top-1 right-1 w-4 h-4 bg-red-600 text-white rounded-full flex items-center justify-center text-[10px]" title="Remove image">✕</button>
+                      <div className="absolute top-1 left-1 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleRecropNewFile(idx)}
+                          className="p-1 rounded bg-black/60 hover:bg-[#9D4C29] text-white text-[9px] transition flex items-center justify-center cursor-pointer"
+                          title="Re-crop this image"
+                        >
+                          <Crop size={10} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleTriggerReplaceNew(idx)}
+                          className="p-1 rounded bg-black/60 hover:bg-[#9D4C29] text-white text-[9px] transition flex items-center justify-center cursor-pointer"
+                          title="Replace with another image"
+                        >
+                          <RefreshCw size={10} />
+                        </button>
+                      </div>
                       {mode === 'add' && (
                         <button type="button" onClick={() => setPrimaryNewIndex(idx)} className={`absolute bottom-1 left-1 p-0.5 rounded text-[9px] font-bold flex items-center ${primaryNewIndex === idx ? 'bg-[#9D4C29] text-white' : 'bg-black/60 text-white'}`}><Star size={9} fill={primaryNewIndex === idx ? 'currentColor' : 'none'} /> {primaryNewIndex === idx ? 'Cover' : 'Set'}</button>
                       )}
@@ -506,6 +633,14 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
           </form>
         )}
       </div>
+
+      {cropModalData && (
+        <ImageCropModal
+          files={cropModalData.files}
+          onComplete={handleCropComplete}
+          onClose={handleCropCancel}
+        />
+      )}
     </div>
   )
 }

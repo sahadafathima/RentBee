@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import Navbar from '../Components/Navbar'
 import Footer from '../Components/Footer'
+import WishlistHeartButton from '../Components/WishlistHeartButton'
 import { getPublicItems, getPublicCategories } from '../services/api'
 import { Search, X, Package, SlidersHorizontal, RefreshCw, AlertCircle, Bell, ArrowRight } from 'lucide-react'
 
@@ -536,6 +537,11 @@ export default function Browse() {
                               ● Booked
                             </span>
                           )}
+                        </div>
+
+                        {/* Wishlist Heart Button */}
+                        <div className="absolute right-3 top-3">
+                          <WishlistHeartButton item={item} />
                         </div>
                       </div>
 

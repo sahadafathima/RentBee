@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Plus, Pencil, Trash2, ArrowLeft, MapPin, CheckCircle2 } from 'lucide-react'
 import { getUserProfile, getAddresses, createAddress, updateAddress, deleteAddress } from '../services/api'
 import Navbar from '../Components/Navbar'
@@ -19,6 +19,9 @@ const initialForm = {
 
 function MyAddress() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const returnTo = searchParams.get('returnTo')
+
   const [addresses, setAddresses] = useState([])
   const [userProfile, setUserProfile] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -41,6 +44,13 @@ function MyAddress() {
         setUserProfile(profileData)
         const list = Array.isArray(addressesData) ? addressesData : (addressesData?.results || [])
         setAddresses(list)
+        if (returnTo && list.length === 0) {
+          setShowForm(true)
+          setFormData({
+            ...initialForm,
+            full_name: profileData?.full_name || '',
+          })
+        }
       })
       .catch((err) => {
         if (!isCurrent) return
@@ -53,7 +63,7 @@ function MyAddress() {
     return () => {
       isCurrent = false
     }
-  }, [reloadToken])
+  }, [reloadToken, returnTo])
 
   const handleStartAdd = () => {
     setFormData({
@@ -118,6 +128,11 @@ function MyAddress() {
       setShowForm(false)
       setEditingId(null)
       setReloadToken((t) => t + 1)
+      if (returnTo) {
+        setTimeout(() => {
+          navigate(returnTo)
+        }, 500)
+      }
     } catch (err) {
       setErrorMessage(err.message || 'Unable to save address.')
     } finally {
@@ -136,10 +151,10 @@ function MyAddress() {
       <main className="mx-auto max-w-4xl px-4 py-8">
         <button
           type="button"
-          onClick={() => navigate('/profile')}
+          onClick={() => (returnTo ? navigate(returnTo) : navigate('/profile'))}
           className="mb-6 flex items-center gap-2 text-sm font-medium text-[#927D71] hover:text-[#D97745]"
         >
-          <ArrowLeft size={16} /> Back to Profile
+          <ArrowLeft size={16} /> {returnTo ? 'Back to Booking Request' : 'Back to Profile'}
         </button>
 
         <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
@@ -410,6 +425,16 @@ function MyAddress() {
                       </p>
                       <p className="text-xs text-gray-400">{addr.country}</p>
                     </div>
+
+                    {returnTo && (
+                      <button
+                        type="button"
+                        onClick={() => navigate(returnTo)}
+                        className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#D97745] px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#B85D32] transition"
+                      >
+                        <CheckCircle2 size={14} /> Deliver to this Address & Continue Booking
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

@@ -34,6 +34,8 @@ class ProfileSerializer(serializers.ModelSerializer):
             "email",
             "phone_number",
             "profile_image",
+            "upi_id",
+            "qr_code",
         ]
 
     def validate_phone_number(self, value):

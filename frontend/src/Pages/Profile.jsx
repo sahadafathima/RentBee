@@ -238,15 +238,16 @@ function Profile() {
                       navigate('/edit-profile')
                     } else if (option.title === 'My Addresses') {
                       navigate('/my-address')
+                    } else if (option.title === 'Host Hub' || option.title === 'Incoming Requests') {
+                      navigate('/host-hub')
                     } else if (option.title === 'Logout') {
                       setShowLogoutConfirm(true)
                     }
                   }}
-                  className={`flex w-full items-center gap-3 px-4 py-4 text-left hover:bg-[#FFFAF6] ${
-                    index !== profileOptions.length - 1
+                  className={`flex w-full items-center gap-3 px-4 py-4 text-left hover:bg-[#FFFAF6] ${index !== profileOptions.length - 1
                       ? 'border-b border-orange-100'
                       : ''
-                  }`}
+                    }`}
                 >
 
                   {/* Option icon */}

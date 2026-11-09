@@ -66,7 +66,11 @@ INSTALLED_APPS = [
     'admin_panel',
     'rest_framework_simplejwt.token_blacklist',
     'catalog',
+    'bookings',
 ]
+
+# Booking and Rental Settings
+RENTAL_PENDING_APPROVAL_EXPIRY_HOURS = 24
 AUTH_USER_MODEL = 'users.User'
 SITE_ID = 1
 MIDDLEWARE = [

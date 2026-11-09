@@ -50,20 +50,29 @@ export async function refreshAccessToken() {
       throw new Error('Refresh token not found.')
     }
 
-    // Refresh API does not require an access token
-    const data = await apiRequest('/token/refresh/', {
+    // Direct fetch to avoid circular apiRequest calls or interceptor side-effects
+    const response = await fetch(`${API_BASE_URL}/token/refresh/`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
         refresh: refreshToken,
       }),
     })
 
+    if (!response.ok) {
+      const errText = await response.text()
+      throw new Error(`Refresh failed: ${errText || response.statusText}`)
+    }
+
+    const data = await response.json()
+
     if (!data.access) {
       throw new Error('New access token was not returned.')
     }
 
-
-    saveAuthTokens(data.access, data.refresh)
+    saveAuthTokens(data.access, data.refresh || refreshToken)
 
     return data.access
   })()
@@ -162,22 +171,33 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
     requiresAuth &&
     !isRetry
   ) {
-
-  
     const isAdmin =
       localStorage.getItem('rentbee_is_admin') === 'true'
 
     try {
+      // Check if another parallel request already refreshed the access token
+      const currentToken = getAccessToken()
+      if (currentToken && currentToken !== accessToken) {
+        return await apiRequest(endpoint, options, true)
+      }
 
       // Get a new access token
       await refreshAccessToken()
-
-      
       return await apiRequest(endpoint, options, true)
-
     } catch (error) {
-
       console.error('Token refresh failed:', error)
+
+      // Preserve current location before wiping tokens so user can resume seamlessly
+      try {
+        if (typeof window !== 'undefined' && window.location) {
+          const currentPath = window.location.pathname + window.location.search
+          if (!currentPath.includes('/login')) {
+            sessionStorage.setItem('rentbee_redirect_after_login', currentPath)
+          }
+        }
+      } catch (e) {
+        console.warn('Could not save return URL:', e)
+      }
 
       clearAuthTokens()
       localStorage.removeItem('rentbee_is_admin')

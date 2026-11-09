@@ -96,3 +96,28 @@ class RentalKitItem(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.item.name})"
+
+
+class WishlistItem(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='wishlist_items'
+    )
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.CASCADE,
+        related_name='wishlisted_by'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ('user', 'item')
+        indexes = [
+            models.Index(fields=['user', 'item']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} - {self.item.name}"
+

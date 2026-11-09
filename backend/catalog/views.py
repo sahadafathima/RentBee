@@ -1,16 +1,17 @@
 import json
 from django.core.paginator import Paginator
+from django.db import transaction, IntegrityError
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from admin_panel.permissions import IsAdminUser
 from .image_utils import process_item_image
-from .models import Category, Item, ItemImage, RentalKitItem
-from .serializers import CategorySerializer, ItemSerializer
+from .models import Category, Item, ItemImage, RentalKitItem, WishlistItem
+from .serializers import CategorySerializer, ItemSerializer, WishlistItemSerializer
 
 
 # ==========================================
@@ -355,7 +356,145 @@ class PublicCategoryListView(APIView):
             is_deleted=False
         ).exclude(name__iexact='all categories').exclude(icon='▦').annotate(
             items_count=Count('items', filter=Q(items__is_deleted=False, items__is_published=True))
-        ).order_by('name')
+        ).order_by('created_at', 'id')
 
         serializer = CategorySerializer(categories, many=True)
         return Response(serializer.data)
+
+
+# ==========================================
+# WISHLIST VIEWS (Authenticated Customer)
+# ==========================================
+
+class WishlistListView(APIView):
+    """
+    List all wishlisted items for the logged-in user, or add an item to the wishlist.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = WishlistItem.objects.filter(
+            user=request.user,
+            item__is_deleted=False,
+            item__is_published=True,
+            item__category__is_active=True,
+            item__category__is_deleted=False,
+        ).select_related(
+            'item', 'item__category', 'item__owner'
+        ).prefetch_related(
+            'item__images', 'item__owner__addresses', 'item__rental_kit_items'
+        )
+
+        item_ids = list(qs.values_list('item_id', flat=True))
+        serializer = WishlistItemSerializer(qs, many=True, context={'request': request})
+
+        return Response({
+            'count': qs.count(),
+            'item_ids': item_ids,
+            'results': serializer.data,
+        })
+
+    def post(self, request):
+        item_id = request.data.get('item_id')
+        if not item_id:
+            return Response({'error': 'item_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            item_id = int(item_id)
+        except (ValueError, TypeError):
+            return Response({'error': 'Invalid item_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        item = get_object_or_404(Item, pk=item_id, is_deleted=False)
+
+        with transaction.atomic():
+            wishlist_item, created = WishlistItem.objects.get_or_create(
+                user=request.user,
+                item=item
+            )
+
+        count = WishlistItem.objects.filter(
+            user=request.user,
+            item__is_deleted=False,
+            item__is_published=True
+        ).count()
+
+        return Response({
+            'is_wishlisted': True,
+            'item_id': item.id,
+            'count': count,
+            'message': 'Item added to your wishlist.' if created else 'Item is already in your wishlist.'
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class WishlistToggleView(APIView):
+    """
+    Toggle wishlist status for a given item:
+    If wishlisted -> remove it.
+    If not wishlisted -> add it.
+    Uses atomic transaction to safely handle rapid clicks and concurrent requests.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        item_id = request.data.get('item_id')
+        if not item_id:
+            return Response({'error': 'item_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            item_id = int(item_id)
+        except (ValueError, TypeError):
+            return Response({'error': 'Invalid item_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        item = get_object_or_404(Item, pk=item_id, is_deleted=False)
+
+        with transaction.atomic():
+            deleted_count, _ = WishlistItem.objects.filter(user=request.user, item=item).delete()
+            if deleted_count > 0:
+                is_wishlisted = False
+                message = 'Item removed from your wishlist.'
+            else:
+                try:
+                    WishlistItem.objects.create(user=request.user, item=item)
+                    is_wishlisted = True
+                    message = 'Item added to your wishlist.'
+                except IntegrityError:
+                    is_wishlisted = True
+                    message = 'Item is already in your wishlist.'
+
+        count = WishlistItem.objects.filter(
+            user=request.user,
+            item__is_deleted=False,
+            item__is_published=True
+        ).count()
+
+        return Response({
+            'is_wishlisted': is_wishlisted,
+            'item_id': item.id,
+            'count': count,
+            'message': message,
+        })
+
+
+class WishlistDetailView(APIView):
+    """
+    Remove an item from the wishlist by item_id.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, item_id):
+        with transaction.atomic():
+            WishlistItem.objects.filter(user=request.user, item_id=item_id).delete()
+
+        count = WishlistItem.objects.filter(
+            user=request.user,
+            item__is_deleted=False,
+            item__is_published=True
+        ).count()
+
+        return Response({
+            'is_wishlisted': False,
+            'item_id': item_id,
+            'count': count,
+            'message': 'Item removed from your wishlist.'
+        })
+

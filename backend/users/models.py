@@ -108,6 +108,12 @@ class Profile(models.Model):
         blank=True,
         null=True
     )
+    upi_id = models.CharField(max_length=100, blank=True, default='')
+    qr_code = models.ImageField(
+        upload_to="qr_codes/",
+        blank=True,
+        null=True
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
