@@ -507,7 +507,7 @@ export default function Browse() {
             <div>
               <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {items.map((item) => {
-                  const isAvailable = item.stock > 0
+                  const isAvailable = Boolean(item.is_available && item.available_stock > 0)
 
                   return (
                     <article
@@ -530,11 +530,11 @@ export default function Browse() {
                         <div className="absolute left-3 top-3">
                           {isAvailable ? (
                             <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 border border-emerald-200 shadow-xs backdrop-blur-xs">
-                              ● Available
+                              ● Available today
                             </span>
                           ) : (
                             <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-0.5 text-[11px] font-bold text-[#D97745] border border-orange-200 shadow-xs backdrop-blur-xs">
-                              ● Booked
+                              ● Not Available today — {item.availability_reason?.replaceAll('_', ' ') || 'Unavailable'}
                             </span>
                           )}
                         </div>
@@ -553,7 +553,7 @@ export default function Browse() {
                           </h2>
                           <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
                             <span className="font-medium">
-                              Stock: <span className="font-bold text-[#352720]">{item.stock}</span>
+                              Total stock: <span className="font-bold text-[#352720]">{item.total_stock ?? 'Unknown'}</span><br />Available stock today: <span className="font-bold text-[#352720]">{item.available_stock ?? 'Unknown'}</span>
                             </span>
                             <span>
                               Deposit:{' '}

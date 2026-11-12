@@ -1,4 +1,6 @@
 
+import { Link } from 'react-router-dom'
+
 function ListItemBanner() {
   return (
     <section className="bg-[#FFFCF9] px-4 py-10 sm:px-8">
@@ -20,12 +22,12 @@ function ListItemBanner() {
         </div>
 
         {/* Call to action */}
-        <a
-          href="/list-item"
+        <Link
+          to="/list-item"
           className="shrink-0 rounded-full bg-[#D97745] px-7 py-3.5 text-sm font-semibold text-white transition hover:bg-[#B85D32]"
         >
           + List Your Item
-        </a>
+        </Link>
 
       </div>
     </section>

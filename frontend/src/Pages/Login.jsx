@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import InputField from '../Components/InputField'
 import Button from '../Components/Button'
-import { userLogin, saveAuthTokens } from '../services/authentication'
+import { userLogin, saveAuthTokens, getSafeRedirectUrl } from '../services/authentication'
 import logo from '../assets/rentbee_logo.png'
 
 function Login() {
@@ -78,13 +78,10 @@ function Login() {
     setMessage('Login successful! Welcome to RentBee.')
 
     setTimeout(() => {
-      const redirectUrl = sessionStorage.getItem('rentbee_redirect_after_login')
-      if (redirectUrl) {
-        sessionStorage.removeItem('rentbee_redirect_after_login')
-        navigate(redirectUrl)
-      } else {
-        navigate('/')
-      }
+      const rawRedirect = sessionStorage.getItem('rentbee_redirect_after_login')
+      sessionStorage.removeItem('rentbee_redirect_after_login')
+      const target = getSafeRedirectUrl(rawRedirect)
+      navigate(target)
     }, 1500)
 
   } catch (error) {

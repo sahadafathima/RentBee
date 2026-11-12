@@ -16,9 +16,17 @@ from .views import (
     NotificationsListView,
     MarkNotificationReadView,
     MarkAllNotificationsReadView,
+    PushVapidKeyView,
+    PushSubscribeView,
+    PushUnsubscribeView,
+    PushTestView,
 )
 
 urlpatterns = [
+    path('push/vapid-key/', PushVapidKeyView.as_view(), name='push-vapid-key'),
+    path('push/subscribe/', PushSubscribeView.as_view(), name='push-subscribe'),
+    path('push/unsubscribe/', PushUnsubscribeView.as_view(), name='push-unsubscribe'),
+    path('push/test/', PushTestView.as_view(), name='push-test'),
     path('my-bookings/', MyBookingsListView.as_view(), name='my-bookings'),
     path('check-availability/', CheckAvailabilityView.as_view(), name='check-availability'),
     path('notify-availability/', NotifyAvailabilityView.as_view(), name='notify-availability'),

@@ -1,6 +1,7 @@
 import uuid
 from datetime import timedelta
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
@@ -42,6 +43,8 @@ class Booking(models.Model):
     start_date = models.DateField()
     end_date = models.DateField()
     duration_days = models.PositiveIntegerField()
+    # Immutable number of physical units requested at booking time.
+    requested_quantity = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
 
     # Immutable booking-time pricing snapshots
     daily_price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -244,13 +247,47 @@ class InAppNotification(models.Model):
         blank=True,
         related_name='notifications'
     )
+    booking = models.ForeignKey(
+        Booking, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='notifications')
+    event = models.CharField(max_length=30, blank=True, default='')
+
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'booking', 'event'],
+                                    name='unique_booking_notification_event')
+        ]
 
     def __str__(self):
         return f"Notification to {self.user.email}: {self.title}"
+
+
+class PushSubscription(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='push_subscriptions'
+    )
+    endpoint = models.TextField()
+    p256dh = models.CharField(max_length=255)
+    auth = models.CharField(max_length=255)
+    user_agent = models.CharField(max_length=500, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'endpoint'],
+                                    name='unique_user_push_endpoint')
+        ]
+
+    def __str__(self):
+        return f"PushSubscription for {self.user.email} ({self.endpoint[:30]}...)"
+
 
 

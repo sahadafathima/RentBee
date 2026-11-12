@@ -1,6 +1,11 @@
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { initAuthSession } from './services/authentication'
 
 import Home from './Pages/Home'
+import MyListings from './Pages/MyListings'
+import Notifications from './Pages/Notifications'
+import { NotificationProvider } from './Context/NotificationContext'
 import Browse from './Pages/Browse'
 import ItemDetails from './Pages/ItemDetails'
 import RequestBooking from './Pages/RequestBooking'
@@ -17,6 +22,7 @@ import BookingDetails from './Pages/BookingDetails'
 import BookingSuccess from './Pages/BookingSuccess'
 import ReportProblem from './Pages/ReportProblem'
 import HostHub from './Pages/HostHub'
+import ListItem from './Pages/ListItem'
 import UserManagement from './Pages/UserManagement'
 import AdminCategoryManagement from './Pages/AdminCategoryManagement'
 import AdminItemManagement from './Pages/AdminItemManagement'
@@ -27,9 +33,13 @@ import ProtectedUserRoute from './Components/ProtectedUserRoute'
 import { WishlistProvider } from './Context/WishlistContext'
 
 function App() {
+  useEffect(() => {
+    initAuthSession().catch(() => {})
+  }, [])
+
   return (
     <BrowserRouter>
-      <WishlistProvider>
+      <WishlistProvider><NotificationProvider>
         <Routes>
           {/* Public Routes */}
           <Route path="/" element={<Home />} />
@@ -44,6 +54,8 @@ function App() {
 
           {/* Protected User Account Routes */}
           <Route element={<ProtectedUserRoute />}>
+            <Route path="/my-listings" element={<MyListings />} />
+            <Route path="/notifications" element={<Notifications />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/edit-profile" element={<EditProfile />} />
             <Route path="/my-address" element={<MyAddress />} />
@@ -53,6 +65,7 @@ function App() {
             <Route path="/booking-success" element={<BookingSuccess />} />
             <Route path="/report-problem/:id" element={<ReportProblem />} />
             <Route path="/host-hub" element={<HostHub />} />
+            <Route path="/list-item" element={<ListItem />} />
           </Route>
 
           {/* Protected Admin Routes */}
@@ -65,7 +78,7 @@ function App() {
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </WishlistProvider>
+      </NotificationProvider></WishlistProvider>
     </BrowserRouter>
   )
 }

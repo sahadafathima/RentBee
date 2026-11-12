@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Users, LayoutGrid, Package, ChevronRight, LogOut, ExternalLink } from 'lucide-react'
 import rentBeeLogo from '../assets/rentbee_logo.png'
-import { clearAuthTokens } from '../services/authentication'
+import { userLogout } from '../services/authentication'
 
 const NAV = [
   { path: '/admin/users', label: 'User Management', icon: Users },
@@ -13,9 +13,8 @@ export default function AdminLayout({ pageTitle = 'Overview', breadcrumbs = [], 
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
-  const handleAdminLogout = () => {
-    clearAuthTokens()
-    localStorage.removeItem('rentbee_is_admin')
+  const handleAdminLogout = async () => {
+    await userLogout()
     navigate('/admin/login')
   }
 

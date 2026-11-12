@@ -150,6 +150,13 @@ export function getPublicItem(id) {
   return apiRequest(`/items/${id}/`)
 }
 
+export function createItem(formData) {
+  return apiRequest('/items/', {
+    method: 'POST',
+    body: formData,
+  })
+}
+
 // ==========================================
 // BOOKINGS & RENTALS API
 // ==========================================
@@ -222,8 +229,9 @@ export function getHostReports() {
   return apiRequest('/bookings/host/reports/')
 }
 
-export function checkItemAvailability(itemId, startDate, endDate) {
-  return apiRequest(`/bookings/check-availability/?item_id=${itemId}&start_date=${startDate}&end_date=${endDate}`)
+export function checkItemAvailability(itemId, startDate, endDate, requestedQuantity) {
+  const quantity = requestedQuantity === undefined ? '' : `&requested_quantity=${requestedQuantity}`
+  return apiRequest(`/bookings/check-availability/?item_id=${itemId}&start_date=${startDate}&end_date=${endDate}${quantity}`)
 }
 
 export function requestAvailabilityNotification(itemId, startDate, endDate) {
@@ -249,6 +257,34 @@ export function markNotificationRead(id) {
 
 export function markAllNotificationsRead() {
   return apiRequest('/bookings/notifications/mark-all-read/', {
+    method: 'POST',
+  })
+}
+
+// ==========================================
+// WEB PUSH NOTIFICATIONS API
+// ==========================================
+
+export function getPushVapidKey() {
+  return apiRequest('/bookings/push/vapid-key/')
+}
+
+export function savePushSubscription(subscriptionData) {
+  return apiRequest('/bookings/push/subscribe/', {
+    method: 'POST',
+    body: JSON.stringify(subscriptionData),
+  })
+}
+
+export function removePushSubscription(endpoint) {
+  return apiRequest('/bookings/push/unsubscribe/', {
+    method: 'POST',
+    body: JSON.stringify({ endpoint }),
+  })
+}
+
+export function sendTestPushNotification() {
+  return apiRequest('/bookings/push/test/', {
     method: 'POST',
   })
 }
@@ -282,3 +318,17 @@ export function removeFromWishlistApi(itemId) {
 }
 
 
+
+
+export function getMyListings() {
+  return apiRequest('/items/mine/')
+}
+export function getMyListing(id) {
+  return apiRequest(`/items/mine/${id}/`)
+}
+export function updateMyListing(id, formData) {
+  return apiRequest(`/items/mine/${id}/`, { method: 'PATCH', body: formData })
+}
+export function deactivateMyListing(id) {
+  return apiRequest(`/items/mine/${id}/deactivate/`, { method: 'POST' })
+}

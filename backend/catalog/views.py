@@ -131,48 +131,50 @@ class AdminItemListCreateView(APIView):
     def post(self, request):
         serializer = ItemSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        item = serializer.save(owner=request.user)
 
-        # Process multiple uploaded images with Pillow
-        raw_files = request.FILES.getlist('images')
-        try:
-            primary_idx = int(request.data.get('primary_image_index', 0))
-        except (ValueError, TypeError):
-            primary_idx = 0
+        with transaction.atomic():
+            item = serializer.save(owner=request.user)
 
-        for idx, f in enumerate(raw_files):
-            processed_file = process_item_image(f)
-            ItemImage.objects.create(
-                item=item,
-                image=processed_file,
-                is_primary=(idx == primary_idx)
-            )
+            # Process multiple uploaded images with Pillow
+            raw_files = request.FILES.getlist('images')
+            try:
+                primary_idx = int(request.data.get('primary_image_index', 0))
+            except (ValueError, TypeError):
+                primary_idx = 0
 
-        # If files were uploaded but none marked primary, mark the first one
-        if raw_files and not item.images.filter(is_primary=True).exists():
-            first_img = item.images.first()
-            if first_img:
-                first_img.is_primary = True
-                first_img.save(update_fields=['is_primary'])
+            for idx, f in enumerate(raw_files):
+                processed_file = process_item_image(f)
+                ItemImage.objects.create(
+                    item=item,
+                    image=processed_file,
+                    is_primary=(idx == primary_idx)
+                )
 
-        # Process rental kit entries if provided
-        rental_kit_raw = request.data.get('rental_kit')
-        if rental_kit_raw is not None:
-            if isinstance(rental_kit_raw, str):
-                try:
-                    rental_kit_entries = json.loads(rental_kit_raw)
-                except Exception:
-                    rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
-            elif isinstance(rental_kit_raw, list):
-                rental_kit_entries = rental_kit_raw
-            else:
-                rental_kit_entries = []
+            # If files were uploaded but none marked primary, mark the first one
+            if raw_files and not item.images.filter(is_primary=True).exists():
+                first_img = item.images.first()
+                if first_img:
+                    first_img.is_primary = True
+                    first_img.save(update_fields=['is_primary'])
 
-            for entry in rental_kit_entries:
-                if isinstance(entry, str) and entry.strip():
-                    RentalKitItem.objects.create(item=item, name=entry.strip())
-                elif isinstance(entry, dict) and entry.get('name', '').strip():
-                    RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+            # Process rental kit entries if provided
+            rental_kit_raw = request.data.get('rental_kit')
+            if rental_kit_raw is not None:
+                if isinstance(rental_kit_raw, str):
+                    try:
+                        rental_kit_entries = json.loads(rental_kit_raw)
+                    except Exception:
+                        rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
+                elif isinstance(rental_kit_raw, list):
+                    rental_kit_entries = rental_kit_raw
+                else:
+                    rental_kit_entries = []
+
+                for entry in rental_kit_entries:
+                    if isinstance(entry, str) and entry.strip():
+                        RentalKitItem.objects.create(item=item, name=entry.strip())
+                    elif isinstance(entry, dict) and entry.get('name', '').strip():
+                        RentalKitItem.objects.create(item=item, name=entry['name'].strip())
 
         return Response(ItemSerializer(item, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
@@ -206,9 +208,10 @@ class AdminItemDetailView(APIView):
 
         # Handle newly uploaded images with Pillow
         raw_files = request.FILES.getlist('images')
+        new_images = []
         for f in raw_files:
             processed_file = process_item_image(f)
-            ItemImage.objects.create(item=item, image=processed_file, is_primary=False)
+            new_images.append(ItemImage.objects.create(item=item, image=processed_file, is_primary=False))
 
         # Handle primary image selection
         primary_id = request.data.get('primary_image_id')
@@ -219,7 +222,16 @@ class AdminItemDetailView(APIView):
                 item.images.filter(id=primary_id).update(is_primary=True)
             except (ValueError, TypeError):
                 pass
-        elif not item.images.filter(is_primary=True).exists() and item.images.exists():
+        elif new_images and 'primary_image_index' in request.data:
+            try:
+                primary_index = int(request.data['primary_image_index'])
+            except (ValueError, TypeError):
+                primary_index = 0
+            if not 0 <= primary_index < len(new_images):
+                primary_index = 0
+            item.images.update(is_primary=False)
+            item.images.filter(pk=new_images[primary_index].pk).update(is_primary=True)
+        if not item.images.filter(is_primary=True).exists() and item.images.exists():
             first_img = item.images.first()
             first_img.is_primary = True
             first_img.save(update_fields=['is_primary'])
@@ -263,7 +275,60 @@ class AdminItemSoftDeleteView(APIView):
 # ==========================================
 
 class PublicItemListView(APIView):
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [IsAuthenticated()]
+        return [AllowAny()]
+
+    def post(self, request):
+        serializer = ItemSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            item = serializer.save(owner=request.user)
+
+            # Process multiple uploaded images with Pillow
+            raw_files = request.FILES.getlist('images')
+            try:
+                primary_idx = int(request.data.get('primary_image_index', 0))
+            except (ValueError, TypeError):
+                primary_idx = 0
+
+            for idx, f in enumerate(raw_files):
+                processed_file = process_item_image(f)
+                ItemImage.objects.create(
+                    item=item,
+                    image=processed_file,
+                    is_primary=(idx == primary_idx)
+                )
+
+            # If files were uploaded but none marked primary, mark the first one
+            if raw_files and not item.images.filter(is_primary=True).exists():
+                first_img = item.images.first()
+                if first_img:
+                    first_img.is_primary = True
+                    first_img.save(update_fields=['is_primary'])
+
+            # Process rental kit entries if provided
+            rental_kit_raw = request.data.get('rental_kit')
+            if rental_kit_raw is not None:
+                if isinstance(rental_kit_raw, str):
+                    try:
+                        rental_kit_entries = json.loads(rental_kit_raw)
+                    except Exception:
+                        rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
+                elif isinstance(rental_kit_raw, list):
+                    rental_kit_entries = rental_kit_raw
+                else:
+                    rental_kit_entries = []
+
+                for entry in rental_kit_entries:
+                    if isinstance(entry, str) and entry.strip():
+                        RentalKitItem.objects.create(item=item, name=entry.strip())
+                    elif isinstance(entry, dict) and entry.get('name', '').strip():
+                        RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+
+        return Response(ItemSerializer(item, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
     def get(self, request):
         qs = Item.objects.filter(
@@ -498,3 +563,48 @@ class WishlistDetailView(APIView):
             'message': 'Item removed from your wishlist.'
         })
 
+
+
+class OwnerItemListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        items = Item.objects.filter(owner=request.user, is_deleted=False).select_related(
+            'category', 'owner').prefetch_related('images', 'rental_kit_items')
+        return Response({'results': ItemSerializer(items, many=True, context={'request': request}).data})
+
+
+class OwnerItemDetailView(AdminItemDetailView):
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self, pk):
+        items = Item.objects.filter(owner=self.request.user, is_deleted=False)
+        if self.request.method == 'PATCH':
+            items = items.select_for_update()
+        return get_object_or_404(items, pk=pk)
+
+    def patch(self, request, pk):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from PIL import UnidentifiedImageError
+        from rest_framework.exceptions import ValidationError
+        try:
+            with transaction.atomic():
+                return super().patch(request, pk)
+        except (DjangoValidationError, UnidentifiedImageError, OSError) as error:
+            raise ValidationError({'images': str(error)})
+
+
+class OwnerItemDeactivateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        item = get_object_or_404(Item.objects.select_for_update(),
+                                 owner=request.user, pk=pk, is_deleted=False)
+        booking_count = item.bookings.count()
+        # Archive only: bookings and media remain available to authorized participants.
+        item.is_deleted = True
+        item.is_published = False
+        item.save(update_fields=['is_deleted', 'is_published', 'updated_at'])
+        return Response({'message': 'Listing deactivated. Booking history is preserved.',
+                         'preserved_bookings': booking_count})

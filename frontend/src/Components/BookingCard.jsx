@@ -12,6 +12,7 @@ export default function BookingCard({ booking, onCancelClick }) {
     start_date,
     end_date,
     duration_days,
+    requested_quantity,
     rental_amount,
     deposit_amount,
     total_amount,
@@ -136,6 +137,10 @@ export default function BookingCard({ booking, onCancelClick }) {
               <div className="flex items-center gap-1.5 font-medium text-[#9D4C29]">
                 <Clock size={14} />
                 <span>{duration_days} {duration_days === 1 ? 'day' : 'days'}</span>
+              </div>
+              <div className="flex items-center gap-1.5 font-medium text-[#49362D]">
+                <Package size={14} className="text-[#D97745]" />
+                <span>{requested_quantity || 1} unit{(requested_quantity || 1) === 1 ? '' : 's'}</span>
               </div>
             </div>
 

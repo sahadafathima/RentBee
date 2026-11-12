@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   ZoomIn,
   ZoomOut,
@@ -78,7 +78,8 @@ function SingleImageCropper({
   onSkip,
   onClose,
 }) {
-  const imageSrc = useMemo(() => URL.createObjectURL(file), [file])
+  const [imageSrc, setImageSrc] = useState('')
+  const [hasImageLoadError, setHasImageLoadError] = useState(false)
   const [naturalDimensions, setNaturalDimensions] = useState({ width: 0, height: 0 })
   const [aspectRatio, setAspectRatio] = useState(4 / 3)
   const [zoom, setZoom] = useState(1)
@@ -94,15 +95,45 @@ function SingleImageCropper({
   const viewportRef = useRef(null)
 
   useEffect(() => {
-    return () => {
-      URL.revokeObjectURL(imageSrc)
+    let active = true
+    if (!file) {
+      return
     }
-  }, [imageSrc])
+
+    const objectUrl = typeof file === 'string' ? file : URL.createObjectURL(file)
+    Promise.resolve().then(() => {
+      if (active) {
+        setImageSrc(objectUrl)
+        setHasImageLoadError(false)
+      }
+    })
+
+    return () => {
+      active = false
+      if (typeof file !== 'string') {
+        URL.revokeObjectURL(objectUrl)
+      }
+    }
+  }, [file])
 
   const handleImageLoad = (e) => {
-    const { naturalWidth, naturalHeight } = e.target
-    setNaturalDimensions({ width: naturalWidth, height: naturalHeight })
+    const target = e?.target || imageRef.current
+    if (target && target.naturalWidth && target.naturalHeight) {
+      setNaturalDimensions({ width: target.naturalWidth, height: target.naturalHeight })
+      setHasImageLoadError(false)
+    }
   }
+
+  const handleImageError = (e) => {
+    console.error('Failed to load image in crop modal:', e)
+    setHasImageLoadError(true)
+  }
+
+  useEffect(() => {
+    if (imageRef.current && imageRef.current.complete && imageRef.current.naturalWidth) {
+      handleImageLoad({ target: imageRef.current })
+    }
+  }, [imageSrc])
 
   // Calculate visual crop box size inside viewport
   const getCropBoxDimensions = useCallback(() => {
@@ -412,13 +443,15 @@ function SingleImageCropper({
                   src={imageSrc}
                   alt="Crop Target"
                   onLoad={handleImageLoad}
+                  onError={handleImageError}
                   draggable={false}
                   style={{
                     position: 'absolute',
                     left: '50%',
                     top: '50%',
-                    width: `${imgDisplayW}px`,
-                    height: `${imgDisplayH}px`,
+                    width: naturalDimensions.width ? `${imgDisplayW}px` : 'auto',
+                    height: naturalDimensions.height ? `${imgDisplayH}px` : 'auto',
+                    opacity: naturalDimensions.width ? 1 : 0,
                     transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg)`,
                     transformOrigin: 'center center',
                     maxWidth: 'none',
@@ -426,6 +459,13 @@ function SingleImageCropper({
                   }}
                   className="pointer-events-none select-none transition-transform duration-75"
                 />
+              )}
+
+              {hasImageLoadError && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-black/80 text-rose-300 text-xs">
+                  <span>Failed to load image preview.</span>
+                  <span className="text-[11px] text-gray-400 mt-1">Click &quot;Skip Crop&quot; to use this image as-is.</span>
+                </div>
               )}
             </div>
 

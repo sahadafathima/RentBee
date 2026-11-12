@@ -223,7 +223,10 @@ export default function AdminItemManagement() {
   )
 }
 
-function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) {
+export function ItemModal({ mode, item, categories, loading, error, onClose, onSave, stockLabel = 'Stock Available' }) {
+  const formCategories = item?.category_id && !categories.some((c) => c.id === item.category_id)
+    ? [{ id: item.category_id, name: `${item.category_name} (current category)`, icon: item.category_icon }, ...categories]
+    : categories
   const getInitialCategoryId = () => {
     if (item?.category_id) return item.category_id
     if (item?.category_name && categories.length > 0) {
@@ -348,6 +351,7 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
       setNewPreviews((prev) => prev.map((u, i) => (i === idx ? newUrl : u)))
     } else if (cropModalData?.type === 'replace_existing' && cropModalData.existingId) {
       const existingId = cropModalData.existingId
+      if (primaryImageId === existingId) setPrimaryNewIndex(newFiles.length)
       removeExistingImage(existingId)
 
       const updatedFile = croppedFiles[0]
@@ -407,6 +411,7 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
 
   const handleSubmit = (e) => {
     e.preventDefault()
+    if (rentalKit.some((entry) => entry.length > 150)) return
     const fd = new FormData()
     const effectiveCategoryId = form.categoryId || (categories.length > 0 ? categories[0].id : '')
     fd.append('name', form.name.trim()); fd.append('category_id', effectiveCategoryId)
@@ -419,6 +424,7 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
     if (mode === 'add') { fd.append('primary_image_index', primaryNewIndex) }
     else {
       if (primaryImageId) fd.append('primary_image_id', primaryImageId)
+      else if (newFiles.length) fd.append('primary_image_index', primaryNewIndex)
       if (deleteImageIds.length > 0) fd.append('delete_image_ids', JSON.stringify(deleteImageIds))
     }
     onSave(fd, item?.id)
@@ -491,16 +497,16 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
               <div>
                 <label className="block text-xs font-semibold text-[#51463d] mb-1">Category *</label>
                 <select required value={form.categoryId || (categories.length > 0 ? categories[0].id : '')} onChange={(e) => setForm({ ...form, categoryId: e.target.value })} className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3 py-2 text-sm outline-none">
-                  {categories.length === 0 && <option value="" disabled>Loading categories…</option>}
-                  {categories.map((c) => <option key={c.id} value={c.id}>{getCategoryIcon(c.icon)} {c.name}</option>)}
+                  {formCategories.length === 0 && <option value="" disabled>Loading categories…</option>}
+                  {formCategories.map((c) => <option key={c.id} value={c.id}>{getCategoryIcon(c.icon)} {c.name}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-[#51463d] mb-1">Price / Day (₹) *</label>
-                <input required type="number" step="0.01" min="1" value={form.rentalPrice} onChange={(e) => setForm({ ...form, rentalPrice: e.target.value })} placeholder="e.g. 450" className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3.5 py-2 text-sm outline-none" />
+                <input required type="number" step="0.01" min="0.01" value={form.rentalPrice} onChange={(e) => setForm({ ...form, rentalPrice: e.target.value })} placeholder="e.g. 450" className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3.5 py-2 text-sm outline-none" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-[#51463d] mb-1">Stock Available *</label>
+                <label className="block text-xs font-semibold text-[#51463d] mb-1">{stockLabel} *</label>
                 <input required type="number" min="0" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} placeholder="1" className="w-full rounded-lg border border-[#e5d9cf] bg-white px-3.5 py-2 text-sm outline-none" />
               </div>
               <div>
@@ -566,8 +572,8 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
                           <RefreshCw size={10} />
                         </button>
                       </div>
-                      {mode === 'add' && (
-                        <button type="button" onClick={() => setPrimaryNewIndex(idx)} className={`absolute bottom-1 left-1 p-0.5 rounded text-[9px] font-bold flex items-center ${primaryNewIndex === idx ? 'bg-[#9D4C29] text-white' : 'bg-black/60 text-white'}`}><Star size={9} fill={primaryNewIndex === idx ? 'currentColor' : 'none'} /> {primaryNewIndex === idx ? 'Cover' : 'Set'}</button>
+                      {(mode === 'add' || mode === 'edit') && (
+                        <button type="button" onClick={() => { setPrimaryNewIndex(idx); setPrimaryImageId(null) }} className={`absolute bottom-1 left-1 p-0.5 rounded text-[9px] font-bold flex items-center ${primaryNewIndex === idx && !primaryImageId ? 'bg-[#9D4C29] text-white' : 'bg-black/60 text-white'}`}><Star size={9} fill={primaryNewIndex === idx && !primaryImageId ? 'currentColor' : 'none'} /> {primaryNewIndex === idx && !primaryImageId ? 'Cover' : 'Set'}</button>
                       )}
                     </div>
                   ))}
@@ -596,13 +602,18 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
               ) : (
                 <div className="flex flex-col gap-2 max-h-36 overflow-y-auto p-1">
                   {rentalKit.map((entry, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
+                    <div key={idx}>
+                    <div className="flex items-center gap-2">
                       <input
                         type="text"
+                        maxLength={150}
+                        aria-label={`Rental kit entry ${idx + 1}`}
+                        aria-invalid={entry.length > 150}
+                        aria-describedby={`rental-kit-help-${idx}`}
                         value={entry}
                         onChange={(e) => handleUpdateRentalKitEntry(idx, e.target.value)}
                         placeholder="e.g. 50mm f/1.8 Lens, 2x Battery, Charger"
-                        className="flex-1 rounded-lg border border-[#e5d9cf] bg-white px-3 py-1.5 text-xs outline-none focus:border-[#9D4C29]"
+                        className="min-w-0 flex-1 rounded-lg border border-[#e5d9cf] bg-white px-3 py-1.5 text-xs outline-none focus:border-[#9D4C29]"
                       />
                       <button
                         type="button"
@@ -612,6 +623,10 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
                       >
                         <Trash2 size={13} />
                       </button>
+                    </div>
+                    <p id={`rental-kit-help-${idx}`} className={`mt-1 text-xs ${entry.length > 150 ? 'text-red-700' : 'text-gray-500'}`} role={entry.length > 150 ? 'alert' : undefined}>
+                      {entry.length}/150{entry.length > 150 && ` — Entry ${idx + 1} exceeds 150 characters. Shorten it before saving.`}
+                    </p>
                     </div>
                   ))}
                 </div>
@@ -626,7 +641,7 @@ function ItemModal({ mode, item, categories, loading, error, onClose, onSave }) 
             </label>
             <div className="flex justify-end gap-2.5 pt-2 border-t border-[#f0e9e3]">
               <button type="button" onClick={onClose} className="rounded-lg border border-[#e5d9cf] bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50">Cancel</button>
-              <button type="submit" disabled={loading} className="rounded-lg bg-[#9D4C29] px-5 py-2 text-sm font-medium text-white hover:bg-[#813d21] disabled:opacity-50 transition">
+              <button type="submit" disabled={loading || rentalKit.some((entry) => entry.length > 150)} className="rounded-lg bg-[#9D4C29] px-5 py-2 text-sm font-medium text-white hover:bg-[#813d21] disabled:opacity-50 transition">
                 {loading ? 'Saving…' : mode === 'add' ? 'Create Item' : 'Update Item'}
               </button>
             </div>

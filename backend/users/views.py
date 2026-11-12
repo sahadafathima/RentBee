@@ -552,7 +552,7 @@ def reset_password_with_otp(request):
 # -------------------- LOGOUT --------------------
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def logout(request):
 
     refresh_token = request.data.get("refresh")

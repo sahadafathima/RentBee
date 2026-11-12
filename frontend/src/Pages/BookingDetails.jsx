@@ -1,3 +1,4 @@
+import useCurrentUserId from '../hooks/useCurrentUserId'
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import Navbar from '../Components/Navbar'
@@ -26,6 +27,7 @@ import { formatKolkataDateTime, calculateReturnCountdown } from '../utils/dateUt
 
 export default function BookingDetails() {
   const { id } = useParams()
+  const viewerId = useCurrentUserId()
   const [booking, setBooking] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -285,7 +287,7 @@ export default function BookingDetails() {
                     </Link>
                   )}
 
-                  {booking.status === 'completed' && (
+                  {booking.renter?.id === viewerId && booking.status === 'completed' && (
                     <Link
                       to={`/request-booking/${booking.item?.id}`}
                       className="rounded-xl bg-[#9D4C29] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#813B20] transition"
@@ -295,6 +297,30 @@ export default function BookingDetails() {
                   )}
                 </div>
               </div>
+
+              {/* Rejection Notice Banner */}
+              {booking.status === 'rejected' && (
+                <div className="rounded-3xl border border-rose-200 bg-rose-50/70 p-5 shadow-xs">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle size={20} className="text-rose-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <h3 className="font-bold text-rose-950 text-sm">
+                        Booking Request Declined by Owner
+                      </h3>
+                      <p className="text-xs text-rose-800 leading-relaxed">
+                        {booking.rejection_reason ? (
+                          <>
+                            <span className="font-semibold text-rose-900">Reason provided: </span>
+                            {booking.rejection_reason}
+                          </>
+                        ) : (
+                          'The owner was unable to accommodate this rental request.'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Grid: Rental Item Details & Pricing Breakdown */}
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -490,6 +516,22 @@ export default function BookingDetails() {
                           The exact return deadline will be stamped the moment the owner confirms physical item pickup ({booking.duration_days} × 24-hour periods from handover).
                         </p>
                       </div>
+                    ) : booking.status === 'rejected' ? (
+                      <div className="rounded-2xl bg-rose-50/60 border border-rose-200 p-4 text-xs text-rose-950 space-y-2">
+                        <div className="flex items-center gap-2 text-rose-800 font-bold text-sm">
+                          <AlertTriangle size={16} />
+                          <span>Booking Request Declined</span>
+                        </div>
+                        <p className="leading-relaxed text-gray-600">
+                          This booking request was declined by the owner and did not proceed to rental.
+                        </p>
+                        {booking.rejection_reason && (
+                          <div className="pt-2 border-t border-rose-100 text-xs">
+                            <span className="text-rose-800 font-semibold block">Reason for Rejection:</span>
+                            <span className="text-[#352720] mt-0.5 block">{booking.rejection_reason}</span>
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div className="rounded-2xl bg-gray-50 border border-gray-200 p-4 text-xs text-gray-600 space-y-1">
                         <p>
@@ -665,6 +707,10 @@ export default function BookingDetails() {
                       <div className="flex justify-between items-center text-gray-600">
                         <span>Rental Duration:</span>
                         <span className="font-semibold text-[#352720]">{booking.duration_days} {booking.duration_days === 1 ? 'day' : 'days'}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-gray-600">
+                        <span>Requested Quantity:</span>
+                        <span className="font-semibold text-[#352720]">{booking.requested_quantity || 1} unit{(booking.requested_quantity || 1) === 1 ? '' : 's'}</span>
                       </div>
 
                       <div className="flex justify-between items-center text-gray-600">

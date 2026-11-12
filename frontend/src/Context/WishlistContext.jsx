@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getWishlist, toggleWishlistApi, removeFromWishlistApi } from '../services/api'
-import { getAccessToken } from '../services/authentication'
+import { hasActiveSession } from '../services/authentication'
 
 const WishlistContext = createContext(null)
 
@@ -10,7 +10,7 @@ export function WishlistProvider({ children }) {
   const [wishlistItems, setWishlistItems] = useState([])
   const [wishlistItemIds, setWishlistItemIds] = useState(() => new Set())
   const [wishlistCount, setWishlistCount] = useState(0)
-  const [loading, setLoading] = useState(() => Boolean(getAccessToken()))
+  const [loading, setLoading] = useState(() => hasActiveSession())
   const [reloadToken, setReloadToken] = useState(0)
 
   // Track in-flight items to prevent double-click race conditions
@@ -23,8 +23,7 @@ export function WishlistProvider({ children }) {
 
   useEffect(() => {
     let isCurrent = true
-    const token = getAccessToken()
-    if (!token) {
+    if (!hasActiveSession()) {
       return
     }
 
@@ -42,6 +41,9 @@ export function WishlistProvider({ children }) {
       .catch((err) => {
         if (!isCurrent) return
         console.error('Failed to load wishlist:', err)
+        setWishlistItems([])
+        setWishlistItemIds(new Set())
+        setWishlistCount(0)
       })
       .finally(() => {
         if (isCurrent) setLoading(false)
@@ -51,6 +53,31 @@ export function WishlistProvider({ children }) {
       isCurrent = false
     }
   }, [reloadToken])
+
+  // Reset local wishlist state safely when authentication expires or changes
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setWishlistItems([])
+      setWishlistItemIds(new Set())
+      setWishlistCount(0)
+      setLoading(false)
+    }
+
+    const handleAuthChanged = (event) => {
+      if (event.detail?.loggedIn) {
+        refreshWishlist()
+      } else {
+        handleAuthExpired()
+      }
+    }
+
+    window.addEventListener('rentbee:auth-expired', handleAuthExpired)
+    window.addEventListener('rentbee:auth-changed', handleAuthChanged)
+    return () => {
+      window.removeEventListener('rentbee:auth-expired', handleAuthExpired)
+      window.removeEventListener('rentbee:auth-changed', handleAuthChanged)
+    }
+  }, [refreshWishlist])
 
   const isWishlisted = useCallback(
     (itemId) => {
@@ -72,8 +99,7 @@ export function WishlistProvider({ children }) {
     async (item) => {
       if (!item || !item.id) return
 
-      const token = getAccessToken()
-      if (!token) {
+      if (!hasActiveSession()) {
         if (typeof window !== 'undefined' && window.location) {
           const currentPath = window.location.pathname + window.location.search
           if (!currentPath.includes('/login')) {

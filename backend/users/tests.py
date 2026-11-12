@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 from .models import PendingSignup
 from django.utils import timezone
 from datetime import timedelta
@@ -87,3 +88,56 @@ class UserAuthAPITests(TestCase):
         self.assertIn("access", res.data)
         self.assertIn("refresh", res.data)
         self.assertTrue(res.data["user"]["is_staff"])
+
+
+class TokenLifecycleAndLogoutTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="tokenuser@rentbee.com",
+            password="StrongPassword123!",
+            full_name="Token User",
+            phone_number="9998887772",
+            is_email_verified=True,
+            is_active=True,
+        )
+
+    def test_token_refresh_successful_rotation(self):
+        refresh = RefreshToken.for_user(self.user)
+        res = self.client.post("/api/token/refresh/", {
+            "refresh": str(refresh),
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("access", res.data)
+        self.assertIn("refresh", res.data)
+        new_refresh = res.data["refresh"]
+        self.assertNotEqual(str(refresh), new_refresh)
+
+    def test_old_refresh_token_blacklisted_after_rotation(self):
+        refresh = RefreshToken.for_user(self.user)
+        res1 = self.client.post("/api/token/refresh/", {
+            "refresh": str(refresh),
+        }, format="json")
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+
+        # Attempting to use the old refresh token again must fail (blacklisted)
+        res2 = self.client.post("/api/token/refresh/", {
+            "refresh": str(refresh),
+        }, format="json")
+        self.assertEqual(res2.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_logout_blacklists_refresh_token_without_access_token(self):
+        refresh = RefreshToken.for_user(self.user)
+        # Logout call without Authorization header (unauthenticated / expired access token)
+        res = self.client.post("/api/logout/", {
+            "refresh": str(refresh),
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["message"], "Logout successful.")
+
+        # The blacklisted token cannot be used to refresh
+        refresh_res = self.client.post("/api/token/refresh/", {
+            "refresh": str(refresh),
+        }, format="json")
+        self.assertEqual(refresh_res.status_code, status.HTTP_401_UNAUTHORIZED)
+

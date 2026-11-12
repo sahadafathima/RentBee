@@ -86,6 +86,14 @@ function BookingSuccess() {
                   <div className="flex items-start gap-2.5">
                     <Tag size={18} className="text-[#D97745] shrink-0 mt-0.5" />
                     <div>
+                      <span className="text-[#8B776D] block">Requested Quantity:</span>
+                      <span className="font-semibold text-[#352720]">{booking.requested_quantity || 1} unit{(booking.requested_quantity || 1) === 1 ? '' : 's'}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-2.5">
+                    <Tag size={18} className="text-[#D97745] shrink-0 mt-0.5" />
+                    <div>
                       <span className="text-[#8B776D] block">Duration:</span>
                       <span className="font-semibold text-[#352720]">
                         {booking.duration_days} day{booking.duration_days > 1 ? 's' : ''}
@@ -97,7 +105,7 @@ function BookingSuccess() {
                 {/* Price Breakdown */}
                 <div className="pt-4 space-y-2 text-xs sm:text-sm">
                   <div className="flex justify-between text-[#6E584E]">
-                    <span>Rental Rate ({booking.duration_days}d × ₹{Number(booking.daily_price || 0).toLocaleString()}):</span>
+                    <span>Rental Rate ({booking.requested_quantity || 1} × {booking.duration_days}d × ₹{Number(booking.daily_price || 0).toLocaleString()}):</span>
                     <span className="font-semibold text-[#352720]">₹{Number(booking.rental_amount || 0).toLocaleString()}</span>
                   </div>
 

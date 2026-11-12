@@ -189,20 +189,38 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': False,
 }
+
+# Default allowed origins for local Vite development
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+]
 
 cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
 if cors_env:
-    CORS_ALLOWED_ORIGINS = [c.strip() for c in cors_env.split(',') if c.strip()]
+    env_origins = [c.strip() for c in cors_env.split(',') if c.strip()]
+    CORS_ALLOWED_ORIGINS = list(dict.fromkeys(DEFAULT_CORS_ORIGINS + env_origins))
 else:
-    CORS_ALLOWED_ORIGINS = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+    CORS_ALLOWED_ORIGINS = DEFAULT_CORS_ORIGINS
+
+if DEBUG:
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^http://(localhost|127\.0\.0\.1):(517[3-9]|3000)$",
     ]
 
-    # its allow to the auth user and allow permission
+# Web Push VAPID Configuration (Loaded from environment variables)
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_CLAIM_EMAIL = os.environ.get('VAPID_CLAIM_EMAIL', 'mailto:support@rentbee.com')
+
 

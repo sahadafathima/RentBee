@@ -6,7 +6,7 @@ from rest_framework import serializers
 from catalog.models import Item
 from catalog.serializers import ItemImageSerializer
 from .models import Booking, IssueReport, AvailabilityNotificationRequest, InAppNotification
-from .services import check_item_conflicts
+from .services import get_item_availability, notify_booking_event
 
 
 class IssueReportSerializer(serializers.ModelSerializer):
@@ -23,10 +23,10 @@ class IssueReportSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'booking', 'renter', 'owner', 'status', 'created_at', 'updated_at']
 
     def get_renter_name(self, obj):
-        return getattr(obj.renter, 'full_name', '') or obj.renter.email
+        return getattr(obj.renter, 'full_name', '') or 'Renter'
 
     def get_owner_name(self, obj):
-        return getattr(obj.owner, 'full_name', '') or obj.owner.email
+        return getattr(obj.owner, 'full_name', '') or 'Host'
 
     def validate_description(self, value):
         cleaned = value.strip()
@@ -56,7 +56,76 @@ class BookingItemSummarySerializer(serializers.ModelSerializer):
         return img.image.url
 
 
-class BookingListSerializer(serializers.ModelSerializer):
+class BookingParticipantPrivacyMixin:
+    CONTACT_STATUSES = {'waiting_for_pickup', 'rental_in_progress', 'completed'}
+
+    def participant_data(self, booking, participant, role):
+        request = self.context.get('request')
+        viewer = getattr(request, 'user', None)
+        authenticated = bool(viewer and viewer.is_authenticated)
+        own = authenticated and viewer.pk == participant.pk
+        staff = authenticated and viewer.is_staff
+        involved = authenticated and viewer.pk in (booking.owner_id, booking.renter_id)
+        visible = own or (involved and booking.status in self.CONTACT_STATUSES)
+        email_visible = own
+        phone_visible = visible
+        # Preserve the legacy detail payload for staff acting as administrators.
+        # Staff participating in a booking follow the same rules as other participants.
+        if staff and not involved and isinstance(self, BookingDetailSerializer):
+            owner_visible = booking.status not in {'pending_approval', 'rejected', 'expired'}
+            visible = role == 'owner' and owner_visible
+            phone_visible = role == 'renter' or owner_visible
+            email_visible = role == 'renter' or owner_visible
+        address = participant.addresses.first()
+        address_info = {
+            'locality': address.area if address else '',
+            'city': address.city if address else '',
+            'state': address.state if address else '',
+            'is_redacted': not visible,
+        }
+        if visible:
+            address_info.update({
+                key: getattr(address, key, '') if address else ''
+                for key in ('house_number', 'address', 'area', 'landmark', 'pincode', 'country')
+            })
+            address_info['full_formatted_address'] = (
+                f"{address.house_number}, {address.address}, {address.area}, "
+                f"{address.landmark + ', ' if address.landmark else ''}"
+                f"{address.city}, {address.state} - {address.pincode}"
+                if address else "Pickup address will be provided by owner."
+            )
+        else:
+            address_info['notice'] = 'Contact details are available only for approved, active, or completed bookings.'
+        data = {
+            'id': participant.pk,
+            'full_name': participant.full_name or ('Host' if role == 'owner' else 'Renter'),
+            'email': participant.email if email_visible else '',
+            'phone_number': participant.phone_number if phone_visible else '',
+            'address_info': address_info,
+        }
+        if role == 'owner':
+            profile = getattr(participant, 'profile', None)
+            photo = profile.profile_image if profile else None
+            data.update({
+                'is_verified': participant.is_email_verified or participant.is_phone_verified,
+                'profile_image': request.build_absolute_uri(photo.url) if photo and request else (photo.url if photo else None),
+            })
+        return data
+
+    def can_act(self, booking, role):
+        request = self.context.get('request')
+        viewer = getattr(request, 'user', None)
+        return bool(viewer and viewer.is_authenticated and (
+            viewer.is_staff or viewer.pk == getattr(booking, role + '_id')))
+
+    def get_owner(self, obj):
+        return self.participant_data(obj, obj.owner, 'owner')
+
+    def get_renter(self, obj):
+        return self.participant_data(obj, obj.renter, 'renter')
+
+
+class BookingListSerializer(BookingParticipantPrivacyMixin, serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
     item = BookingItemSummarySerializer(read_only=True)
@@ -78,7 +147,7 @@ class BookingListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'booking_reference', 'status', 'status_display',
             'payment_status', 'payment_status_display',
-            'start_date', 'end_date', 'duration_days',
+            'start_date', 'end_date', 'duration_days', 'requested_quantity',
             'daily_price', 'rental_amount', 'deposit_amount', 'total_amount',
             'item', 'owner', 'renter',
             'can_cancel', 'can_pickup', 'can_return', 'can_report_problem',
@@ -88,44 +157,20 @@ class BookingListSerializer(serializers.ModelSerializer):
             'created_at', 'rejection_reason', 'cancellation_reason'
         ]
 
-    def get_owner(self, obj):
-        owner = obj.owner
-        profile_img = None
-        if hasattr(owner, 'profile') and owner.profile and owner.profile.profile_image:
-            req = self.context.get('request')
-            profile_img = req.build_absolute_uri(owner.profile.profile_image.url) if req else owner.profile.profile_image.url
-
-        return {
-            'id': owner.id,
-            'full_name': getattr(owner, 'full_name', '') or owner.email.split('@')[0],
-            'email': owner.email,
-            'is_verified': getattr(owner, 'is_email_verified', False) or getattr(owner, 'is_phone_verified', False),
-            'profile_image': profile_img,
-        }
-
-    def get_renter(self, obj):
-        renter = obj.renter
-        return {
-            'id': renter.id,
-            'full_name': getattr(renter, 'full_name', '') or renter.email.split('@')[0],
-            'email': renter.email,
-            'phone_number': getattr(renter, 'phone_number', ''),
-        }
-
     def get_can_cancel(self, obj):
-        return obj.can_renter_cancel()
+        return self.can_act(obj, 'renter') and obj.can_renter_cancel()
 
     def get_can_pickup(self, obj):
-        return obj.status == 'waiting_for_pickup' and obj.is_payment_verified()
+        return self.can_act(obj, 'owner') and obj.status == 'waiting_for_pickup' and obj.is_payment_verified()
 
     def get_can_return(self, obj):
-        return obj.status == 'rental_in_progress'
+        return self.can_act(obj, 'owner') and obj.status == 'rental_in_progress'
 
     def get_can_report_problem(self, obj):
-        return obj.status == 'rental_in_progress'
+        return self.can_act(obj, 'renter') and obj.status == 'rental_in_progress'
 
 
-class BookingDetailSerializer(serializers.ModelSerializer):
+class BookingDetailSerializer(BookingParticipantPrivacyMixin, serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
     item = serializers.SerializerMethodField()
@@ -146,7 +191,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'booking_reference', 'status', 'status_display',
             'payment_status', 'payment_status_display',
-            'start_date', 'end_date', 'duration_days',
+            'start_date', 'end_date', 'duration_days', 'requested_quantity',
             'daily_price', 'rental_amount', 'deposit_amount', 'total_amount',
             'item', 'owner', 'renter', 'issue_reports',
             'approved_at', 'rejected_at', 'rejection_reason',
@@ -160,16 +205,16 @@ class BookingDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_can_cancel(self, obj):
-        return obj.can_renter_cancel()
+        return self.can_act(obj, 'renter') and obj.can_renter_cancel()
 
     def get_can_pickup(self, obj):
-        return obj.status == 'waiting_for_pickup' and obj.is_payment_verified()
+        return self.can_act(obj, 'owner') and obj.status == 'waiting_for_pickup' and obj.is_payment_verified()
 
     def get_can_return(self, obj):
-        return obj.status == 'rental_in_progress'
+        return self.can_act(obj, 'owner') and obj.status == 'rental_in_progress'
 
     def get_can_report_problem(self, obj):
-        return obj.status == 'rental_in_progress'
+        return self.can_act(obj, 'renter') and obj.status == 'rental_in_progress'
 
     def get_item(self, obj):
         item = obj.item
@@ -198,77 +243,11 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             'rental_kit': list(item.rental_kit_items.values_list('name', flat=True)),
         }
 
-    def get_owner(self, obj):
-        owner = obj.owner
-        req = self.context.get('request')
-        profile_img = None
-        if hasattr(owner, 'profile') and owner.profile and owner.profile.profile_image:
-            profile_img = req.build_absolute_uri(owner.profile.profile_image.url) if req else owner.profile.profile_image.url
-
-        addr = owner.addresses.first()
-
-        # Strict Privacy Gate:
-        # Full address & direct contact number are ONLY revealed once the booking reaches waiting_for_pickup,
-        # rental_in_progress, or completed.
-        # During pending_approval, full address and phone number are REDACTED.
-        is_pre_pickup_pending = obj.status in ['pending_approval', 'rejected', 'expired']
-
-        if is_pre_pickup_pending:
-            return {
-                'id': owner.id,
-                'full_name': getattr(owner, 'full_name', '') or owner.email.split('@')[0],
-                'email': '',  # redacted
-                'phone_number': '',  # redacted
-                'is_verified': getattr(owner, 'is_email_verified', False) or getattr(owner, 'is_phone_verified', False),
-                'profile_image': profile_img,
-                'address_info': {
-                    'locality': addr.area if addr else '',
-                    'city': addr.city if addr else '',
-                    'state': addr.state if addr else '',
-                    'is_redacted': True,
-                    'notice': 'Exact pickup address and phone number will be revealed once the owner approves your booking.'
-                }
-            }
-
-        # Confirmed stages: reveal full pickup address and contact details to authorized participant
-        return {
-            'id': owner.id,
-            'full_name': getattr(owner, 'full_name', '') or owner.email.split('@')[0],
-            'email': owner.email,
-            'phone_number': getattr(owner, 'phone_number', ''),
-            'is_verified': getattr(owner, 'is_email_verified', False) or getattr(owner, 'is_phone_verified', False),
-            'profile_image': profile_img,
-            'address_info': {
-                'house_number': addr.house_number if addr else '',
-                'address': addr.address if addr else '',
-                'area': addr.area if addr else '',
-                'landmark': addr.landmark if addr else '',
-                'city': addr.city if addr else '',
-                'state': addr.state if addr else '',
-                'pincode': addr.pincode if addr else '',
-                'country': addr.country if addr else 'India',
-                'full_formatted_address': (
-                    f"{addr.house_number}, {addr.address}, {addr.area}, {addr.landmark + ', ' if addr and addr.landmark else ''}{addr.city}, {addr.state} - {addr.pincode}"
-                    if addr else "Pickup address will be provided by owner."
-                ),
-                'is_redacted': False,
-            }
-        }
-
-    def get_renter(self, obj):
-        renter = obj.renter
-        return {
-            'id': renter.id,
-            'full_name': getattr(renter, 'full_name', '') or renter.email.split('@')[0],
-            'email': renter.email,
-            'phone_number': getattr(renter, 'phone_number', ''),
-        }
-
-
 class BookingCreateSerializer(serializers.Serializer):
     item_id = serializers.IntegerField()
     start_date = serializers.DateField()
     end_date = serializers.DateField()
+    requested_quantity = serializers.IntegerField(required=False, default=1, min_value=1)
 
     def validate_start_date(self, value):
         today = timezone.localdate()
@@ -289,6 +268,7 @@ class BookingCreateSerializer(serializers.Serializer):
 
         user = request.user
         item_id = attrs['item_id']
+        requested_quantity = attrs['requested_quantity']
 
         # Mandatory user address validation
         user_address = user.addresses.first()
@@ -317,14 +297,19 @@ class BookingCreateSerializer(serializers.Serializer):
             if not item.category.is_active or item.category.is_deleted:
                 raise serializers.ValidationError({"item_id": "The category for this item is currently inactive."})
 
-            if item.owner and item.owner_id == user.id:
+            if not item.owner:
+                raise serializers.ValidationError({"item_id": "This item cannot be booked because it has no assigned owner."})
+
+            if item.owner_id == user.id:
                 raise serializers.ValidationError("You cannot book your own item.")
 
-            # Date overlap & concurrency check
-            conflicting = check_item_conflicts(item.id, start_date, end_date)
-            if conflicting.exists():
+            # Pending requests do not reserve capacity. Only approved or active
+            # rentals reduce date availability under the Option A policy.
+            availability = get_item_availability(item, start_date, end_date)
+            if requested_quantity > availability['available_stock']:
                 raise serializers.ValidationError(
-                    "This item is already booked or reserved for the selected dates. Please choose different dates."
+                    {'requested_quantity':
+                     f'Requested quantity is unavailable. Only {availability["available_stock"]} items are currently available for these dates.'}
                 )
 
         attrs['item'] = item
@@ -335,6 +320,7 @@ class BookingCreateSerializer(serializers.Serializer):
         start_date = validated_data['start_date']
         end_date = validated_data['end_date']
         renter = self.context['request'].user
+        requested_quantity = validated_data['requested_quantity']
 
         # Rental duration calculated strictly as difference between start date and return date
         # Return date is not counted as an extra rental day
@@ -343,21 +329,34 @@ class BookingCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({"end_date": "Rental duration must be at least 1 day."})
         daily_price = item.rental_price
         deposit_amount = item.deposit if item.deposit is not None else Decimal('0.00')
-        rental_amount = daily_price * duration_days
+        rental_amount = daily_price * duration_days * requested_quantity
+        deposit_amount = deposit_amount * requested_quantity
         total_amount = rental_amount + deposit_amount
 
-        # Owner snapshot: derived from item.owner at creation
-        owner = item.owner or renter
+        # Owner snapshot: strictly derived from item.owner
+        if not item.owner:
+            raise serializers.ValidationError({"item_id": "This item cannot be booked because it has no owner."})
+        owner = item.owner
 
         with transaction.atomic():
             # Re-lock and double check inside atomic block
             locked_item = Item.objects.select_for_update().get(pk=item.pk)
-            conflicting = check_item_conflicts(locked_item.id, start_date, end_date)
-            if conflicting.exists():
+            availability = get_item_availability(locked_item, start_date, end_date)
+            if requested_quantity > availability['available_stock']:
                 raise serializers.ValidationError(
-                    "This item is already booked or reserved for the selected dates. Please choose different dates."
+                    {'requested_quantity':
+                     f'Requested quantity is unavailable. Only {availability["available_stock"]} items are currently available for these dates.'}
                 )
 
+            if locked_item.owner_id == renter.pk:
+                raise serializers.ValidationError('You cannot book your own item.')
+            if not locked_item.owner_id:
+                raise serializers.ValidationError({'item_id': 'This item has no assigned owner.'})
+            daily_price = locked_item.rental_price
+            deposit_amount = locked_item.deposit * requested_quantity
+            rental_amount = daily_price * duration_days * requested_quantity
+            total_amount = rental_amount + deposit_amount
+            owner = locked_item.owner
             booking = Booking.objects.create(
                 renter=renter,
                 item=locked_item,
@@ -365,6 +364,7 @@ class BookingCreateSerializer(serializers.Serializer):
                 start_date=start_date,
                 end_date=end_date,
                 duration_days=duration_days,
+                requested_quantity=requested_quantity,
                 daily_price=daily_price,
                 rental_amount=rental_amount,
                 deposit_amount=deposit_amount,
@@ -372,6 +372,7 @@ class BookingCreateSerializer(serializers.Serializer):
                 status='pending_approval',
                 payment_status='pending'
             )
+            notify_booking_event(booking, 'requested')
 
         return booking
 
@@ -385,10 +386,19 @@ class AvailabilityNotificationRequestSerializer(serializers.ModelSerializer):
 
 class InAppNotificationSerializer(serializers.ModelSerializer):
     item_name = serializers.CharField(source='item.name', read_only=True)
+    booking_status = serializers.CharField(source='booking.status', read_only=True)
+    can_respond = serializers.SerializerMethodField()
+
+    def get_can_respond(self, obj):
+        request = self.context.get('request')
+        return bool(request and obj.booking_id and obj.event == 'requested'
+                    and obj.booking.item.owner_id == request.user.pk
+                    and obj.booking.status == 'pending_approval'
+                    and not obj.booking.is_expired_pending())
 
     class Meta:
         model = InAppNotification
-        fields = ['id', 'title', 'message', 'item', 'item_name', 'is_read', 'created_at']
+        fields = ['id', 'title', 'message', 'item', 'item_name', 'is_read', 'created_at', 'booking', 'event', 'booking_status', 'can_respond']
         read_only_fields = ['id', 'created_at']
 
 

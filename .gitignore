@@ -9,12 +9,16 @@ __pycache__/
 db.sqlite3
 *.dump
 *.sql
+backup_*.json
+*_dev_data.json
 
 # Virtual Environment & Secrets
 env/
 venv/
 .env
 .env.local
+*.pem
+backend/vapid_dev_private.pem
 
 # Frontend
 node_modules/

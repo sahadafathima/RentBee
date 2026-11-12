@@ -8,7 +8,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from catalog.models import Item
-from .models import Booking, IssueReport, AvailabilityNotificationRequest, InAppNotification
+from .models import Booking, IssueReport, AvailabilityNotificationRequest, InAppNotification, PushSubscription
+from .push_service import get_vapid_public_key, send_web_push
 from .serializers import (
     BookingCreateSerializer,
     BookingDetailSerializer,
@@ -19,7 +20,9 @@ from .serializers import (
 )
 from .services import (
     expire_stale_pending_bookings,
-    check_item_conflicts,
+    get_item_availability,
+    locked_booking_transition,
+    notify_booking_event,
     process_availability_notifications_for_item,
 )
 
@@ -43,14 +46,23 @@ class MyBookingsListView(APIView):
         # Dynamic counts across all user bookings
         counts = {
             'all': base_qs.count(),
+            'incoming': base_qs.filter(status='pending_approval').count(),
+            'accepted': base_qs.filter(status__in=['waiting_for_pickup', 'rental_in_progress']).count(),
             'active': base_qs.filter(status__in=['pending_approval', 'waiting_for_pickup', 'rental_in_progress']).count(),
+            'rejected': base_qs.filter(status='rejected').count(),
             'completed': base_qs.filter(status='completed').count(),
             'cancelled': base_qs.filter(status__in=['cancelled', 'rejected', 'expired']).count(),
         }
 
         tab = request.query_params.get('tab', 'all').lower()
-        if tab == 'active':
+        if tab in ['incoming', 'pending']:
+            qs = base_qs.filter(status='pending_approval')
+        elif tab == 'accepted':
+            qs = base_qs.filter(status__in=['waiting_for_pickup', 'rental_in_progress'])
+        elif tab == 'active':
             qs = base_qs.filter(status__in=['pending_approval', 'waiting_for_pickup', 'rental_in_progress'])
+        elif tab == 'rejected':
+            qs = base_qs.filter(status='rejected')
         elif tab == 'completed':
             qs = base_qs.filter(status='completed')
         elif tab == 'cancelled':
@@ -75,7 +87,7 @@ class MyBookingsListView(APIView):
             page_num = 1
 
         try:
-            page_size = max(1, min(50, int(request.query_params.get('page_size', 6))))
+            page_size = max(1, min(100, int(request.query_params.get('page_size', 6))))
         except (ValueError, TypeError):
             page_size = 6
 
@@ -101,6 +113,7 @@ class BookingCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        expire_stale_pending_bookings()
         serializer = BookingCreateSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
@@ -150,6 +163,7 @@ class CancelBookingView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @locked_booking_transition
     def post(self, request, pk):
         booking = get_object_or_404(Booking, pk=pk)
 
@@ -195,8 +209,8 @@ class OwnerApproveBookingView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @locked_booking_transition
     def post(self, request, pk):
-        expire_stale_pending_bookings()
         booking = get_object_or_404(Booking, pk=pk)
 
         if booking.owner_id != request.user.id and not request.user.is_staff:
@@ -211,9 +225,18 @@ class OwnerApproveBookingView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        availability = get_item_availability(booking.item, booking.start_date, booking.end_date)
+        if booking.requested_quantity > availability['available_stock']:
+            return Response(
+                {'requested_quantity':
+                 f'Requested quantity is unavailable. Only {availability["available_stock"]} items are currently available for these dates.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         booking.status = 'waiting_for_pickup'
         booking.approved_at = timezone.now()
         booking.save(update_fields=['status', 'approved_at', 'updated_at'])
+        notify_booking_event(booking, 'accepted')
 
         return Response({
             'message': 'Booking request approved. Now waiting for pickup.',
@@ -229,6 +252,7 @@ class OwnerRejectBookingView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @locked_booking_transition
     def post(self, request, pk):
         booking = get_object_or_404(Booking, pk=pk)
 
@@ -250,6 +274,7 @@ class OwnerRejectBookingView(APIView):
         booking.rejection_reason = reason
         booking.cancelled_by = request.user
         booking.save(update_fields=['status', 'rejected_at', 'rejection_reason', 'cancelled_by', 'updated_at'])
+        notify_booking_event(booking, 'rejected')
 
         # Notify users who requested availability notifications for this item
         process_availability_notifications_for_item(booking.item_id)
@@ -269,6 +294,7 @@ class ConfirmPickupView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @locked_booking_transition
     def post(self, request, pk):
         booking = get_object_or_404(Booking, pk=pk)
 
@@ -310,6 +336,7 @@ class ConfirmReturnView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @locked_booking_transition
     def post(self, request, pk):
         booking = get_object_or_404(Booking, pk=pk)
 
@@ -328,6 +355,7 @@ class ConfirmReturnView(APIView):
         booking.status = 'completed'
         booking.returned_at = timezone.now()
         booking.save(update_fields=['status', 'returned_at', 'updated_at'])
+        process_availability_notifications_for_item(booking.item_id)
 
         return Response({
             'message': 'Rental completed successfully.',
@@ -397,8 +425,10 @@ class HostBookingsListView(APIView):
         tab = request.query_params.get('tab', 'all').lower()
         if tab == 'incoming':
             qs = base_qs.filter(status='pending_approval')
-        elif tab == 'active':
+        elif tab in ['accepted', 'active']:
             qs = base_qs.filter(status__in=['waiting_for_pickup', 'rental_in_progress'])
+        elif tab == 'rejected':
+            qs = base_qs.filter(status='rejected')
         elif tab == 'completed':
             qs = base_qs.filter(status='completed')
         else:
@@ -407,7 +437,9 @@ class HostBookingsListView(APIView):
         counts = {
             'all': base_qs.count(),
             'incoming': base_qs.filter(status='pending_approval').count(),
+            'accepted': base_qs.filter(status__in=['waiting_for_pickup', 'rental_in_progress']).count(),
             'active': base_qs.filter(status__in=['waiting_for_pickup', 'rental_in_progress']).count(),
+            'rejected': base_qs.filter(status='rejected').count(),
             'completed': base_qs.filter(status='completed').count(),
         }
 
@@ -420,15 +452,17 @@ class HostBookingsListView(APIView):
 
 class HostReportsListView(APIView):
     """
-    Owner's Host Hub endpoint for viewing issues reported on owned items.
+    Endpoint for viewing issues reported on user's bookings (as host or renter).
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        reports = IssueReport.objects.filter(owner=user).select_related(
-            'booking', 'booking__item', 'renter'
-        )
+        reports = IssueReport.objects.filter(
+            Q(owner=user) | Q(renter=user)
+        ).select_related(
+            'booking', 'booking__item', 'renter', 'owner'
+        ).distinct()
         serializer = IssueReportSerializer(reports, many=True, context={'request': request})
         return Response(serializer.data)
 
@@ -483,29 +517,32 @@ class CheckAvailabilityView(APIView):
         except Item.DoesNotExist:
             return Response({'error': 'Item not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if item.is_deleted or not item.is_published:
-            return Response({
-                'is_available': False,
-                'status_label': 'Unavailable',
-                'message': 'Item is currently unavailable for rent.'
-            })
-
-        conflicting_qs = check_item_conflicts(item.id, start_date, end_date)
-        conflicting_count = conflicting_qs.count()
-
-        if conflicting_count > 0:
-            return Response({
-                'is_available': False,
-                'status_label': 'Booked',
-                'message': 'This item is already booked or reserved for the selected dates.',
-                'conflicting_count': conflicting_count
-            })
-
+        availability = get_item_availability(item, start_date, end_date)
+        requested_quantity = request.query_params.get('requested_quantity')
+        requested_quantity_available = None
+        if requested_quantity is not None:
+            try:
+                requested_quantity = int(requested_quantity)
+                if requested_quantity < 1:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return Response({'error': 'requested_quantity must be a positive integer.'}, status=status.HTTP_400_BAD_REQUEST)
+            requested_quantity_available = requested_quantity <= availability['available_stock']
+        message = (
+            'Item is available for these dates.' if availability['is_available']
+            else 'This item is already booked, reserved, or out of stock for the selected dates.'
+        )
+        if requested_quantity is not None and not requested_quantity_available:
+            message = f'Requested quantity is unavailable. Only {availability["available_stock"]} items are currently available for these dates.'
         return Response({
-            'is_available': True,
-            'status_label': 'Available',
-            'message': 'Item is available for these dates.',
-            'conflicting_count': 0
+            **availability,
+            'status_label': ('Available' if availability['is_available'] else
+                             'Booked' if availability['availability_reason'] == 'reserved' else 'Unavailable'),
+            'message': message,
+            'conflicting_count': max(0, availability['total_stock'] - availability['available_stock']),
+            **({'requested_quantity': requested_quantity,
+                'is_requested_quantity_available': requested_quantity_available}
+               if requested_quantity is not None else {}),
         })
 
 
@@ -570,7 +607,7 @@ class NotificationsListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        notifications = InAppNotification.objects.filter(user=request.user).order_by('-created_at')[:50]
+        notifications = InAppNotification.objects.filter(user=request.user).select_related('booking__item', 'item').order_by('-created_at')
         unread_count = InAppNotification.objects.filter(user=request.user, is_read=False).count()
         serializer = InAppNotificationSerializer(notifications, many=True, context={'request': request})
         return Response({
@@ -604,5 +641,88 @@ class MarkAllNotificationsReadView(APIView):
     def post(self, request):
         InAppNotification.objects.filter(user=request.user, is_read=False).update(is_read=True)
         return Response({'message': 'All notifications marked as read.'})
+
+
+class PushVapidKeyView(APIView):
+    """
+    Returns the VAPID public key for web push subscription.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({'public_key': get_vapid_public_key()})
+
+
+class PushSubscribeView(APIView):
+    """
+    Saves or updates a Web Push subscription for the authenticated user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        endpoint = request.data.get('endpoint', '').strip()
+        keys = request.data.get('keys', {})
+        p256dh = keys.get('p256dh', '').strip() if isinstance(keys, dict) else ''
+        auth = keys.get('auth', '').strip() if isinstance(keys, dict) else ''
+
+        if not endpoint or not p256dh or not auth:
+            return Response(
+                {'error': 'Invalid subscription data. endpoint, keys.p256dh and keys.auth are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
+
+        sub, created = PushSubscription.objects.update_or_create(
+            user=request.user,
+            endpoint=endpoint,
+            defaults={
+                'p256dh': p256dh,
+                'auth': auth,
+                'user_agent': user_agent,
+            }
+        )
+
+        return Response({
+            'message': 'Push subscription saved successfully.',
+            'created': created,
+            'id': sub.id
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class PushUnsubscribeView(APIView):
+    """
+    Removes a Web Push subscription for the authenticated user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        endpoint = request.data.get('endpoint', '').strip()
+        if endpoint:
+            PushSubscription.objects.filter(user=request.user, endpoint=endpoint).delete()
+        else:
+            PushSubscription.objects.filter(user=request.user).delete()
+
+        return Response({'message': 'Push subscription removed successfully.'})
+
+
+class PushTestView(APIView):
+    """
+    Sends a test web push notification to the authenticated user's registered devices.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        count = send_web_push(
+            request.user,
+            title='RentBee Test',
+            body='Web push notification is working successfully!',
+            data={'url': '/host-hub', 'type': 'test'}
+        )
+        return Response({
+            'message': f'Test push notification dispatched to {count} active device(s).',
+            'devices_notified': count
+        })
+
 
 

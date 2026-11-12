@@ -6,11 +6,42 @@ import BookingStatusTabs from '../Components/BookingStatusTabs'
 import BookingSearch from '../Components/BookingSearch'
 import BookingCard from '../Components/BookingCard'
 import CancelBookingModal from '../Components/CancelBookingModal'
-import { getMyBookings, cancelBooking } from '../services/api'
+import { getMyBookings, getMyListings, cancelBooking } from '../services/api'
 import { Compass, Inbox, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react'
 
 export default function MyBookings() {
   const [bookings, setBookings] = useState([])
+  const [totalBookings, setTotalBookings] = useState(null)
+  const [totalListings, setTotalListings] = useState(null)
+  const [bookingCountError, setBookingCountError] = useState('')
+  const [listingCountError, setListingCountError] = useState('')
+  const [listingRevision, setListingRevision] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    let pending = false
+    const fetchListingCount = async () => {
+      if (pending || document.visibilityState === 'hidden') return
+      pending = true
+      try {
+        const data = await getMyListings()
+        if (!Array.isArray(data.results)) throw new Error('Could not read your listing count.')
+        if (active) { setTotalListings(data.results.length); setListingCountError('') }
+      } catch (err) {
+        if (active) { setTotalListings(null); setListingCountError(err.message) }
+      } finally { pending = false }
+    }
+    void fetchListingCount()
+    const timer = setInterval(fetchListingCount, 15000)
+    window.addEventListener('focus', fetchListingCount)
+    document.addEventListener('visibilitychange', fetchListingCount)
+    return () => {
+      active = false
+      clearInterval(timer)
+      window.removeEventListener('focus', fetchListingCount)
+      document.removeEventListener('visibilitychange', fetchListingCount)
+    }
+  }, [listingRevision])
   const [counts, setCounts] = useState({ all: 0, active: 0, completed: 0, cancelled: 0 })
   const [activeTab, setActiveTab] = useState('all')
   const [search, setSearch] = useState('')
@@ -45,11 +76,15 @@ export default function MyBookings() {
     })
       .then((data) => {
         setBookings(data.results || [])
+        setTotalBookings(Number.isInteger(data.counts?.all) ? data.counts.all : null)
+        setBookingCountError(Number.isInteger(data.counts?.all) ? '' : 'Could not read your booking count.')
         setCounts(data.counts || { all: 0, active: 0, completed: 0, cancelled: 0 })
         setTotalPages(data.total_pages || 1)
         setLoading(false)
       })
       .catch((err) => {
+        setTotalBookings(null)
+        setBookingCountError(err.message || 'Could not load your booking count.')
         console.error('Failed to fetch bookings:', err)
         setLoading(false)
       })
@@ -57,7 +92,7 @@ export default function MyBookings() {
 
   useEffect(() => {
     let isCurrent = true
-    getMyBookings({
+    const fetchBookings = () => getMyBookings({
       tab: activeTab,
       search: debouncedSearch,
       page,
@@ -66,6 +101,8 @@ export default function MyBookings() {
       .then((data) => {
         if (isCurrent) {
           setBookings(data.results || [])
+          setTotalBookings(Number.isInteger(data.counts?.all) ? data.counts.all : null)
+          setBookingCountError(Number.isInteger(data.counts?.all) ? '' : 'Could not read your booking count.')
           setCounts(data.counts || { all: 0, active: 0, completed: 0, cancelled: 0 })
           setTotalPages(data.total_pages || 1)
           setLoading(false)
@@ -73,12 +110,24 @@ export default function MyBookings() {
       })
       .catch((err) => {
         if (isCurrent) {
+          setTotalBookings(null)
+          setBookingCountError(err.message || 'Could not load your booking count.')
           console.error('Failed to fetch bookings:', err)
           setLoading(false)
         }
       })
 
+    void fetchBookings()
+    const refresh = () => { if (document.visibilityState !== 'hidden') void fetchBookings() }
+    const interval = setInterval(refresh, 15000)
+    window.addEventListener('focus', refresh)
+    window.addEventListener('rentbee:bookings-changed', refresh)
+    document.addEventListener('visibilitychange', refresh)
     return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('rentbee:bookings-changed', refresh)
+      document.removeEventListener('visibilitychange', refresh)
       isCurrent = false
     }
   }, [activeTab, debouncedSearch, page])
@@ -151,6 +200,35 @@ export default function MyBookings() {
               <span>Explore Items</span>
             </Link>
           </div>
+
+          <section aria-label="Your booking and listing totals" className="mb-8">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl border border-orange-100 bg-white p-5 shadow-xs">
+                <h2 className="text-sm font-semibold text-gray-600">Total Bookings</h2>
+                <p role="status" className="mt-2 text-3xl font-black text-[#352720]">
+                  {bookingCountError ? 'Unavailable' : totalBookings ?? 'Loading...'}
+                </p>
+                <p className="mt-2 text-xs text-gray-500">All bookings you made, across every status.</p>
+              </div>
+              <div className="rounded-2xl border border-orange-100 bg-white p-5 shadow-xs">
+                <h2 className="text-sm font-semibold text-gray-600">Total Listings</h2>
+                <p role="status" className="mt-2 text-3xl font-black text-[#352720]">
+                  {listingCountError ? 'Unavailable' : totalListings ?? 'Loading...'}
+                </p>
+                <p className="mt-2 text-xs text-gray-500">Your published and unpublished listings, excluding deactivated items.</p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <Link to="/my-listings" className="inline-flex w-full justify-center rounded-full bg-[#9D4C29] px-5 py-2.5 text-sm font-bold text-white hover:bg-[#813B20] sm:w-auto">My Listings</Link>
+              {(bookingCountError || listingCountError) && <p role="alert" className="text-xs text-rose-700">
+                A summary count could not be loaded.
+                <button type="button" className="ml-2 font-bold underline" onClick={() => {
+                  refetchBookings()
+                  setListingRevision((value) => value + 1)
+                }}>Retry counts</button>
+              </p>}
+            </div>
+          </section>
 
           {/* Booking Status Tabs (Top 4 Cards) */}
           <section aria-label="Booking Status Overview" className="mb-8">
