@@ -28,10 +28,10 @@ export default function BookingNotifications({ history = false, showResponseActi
     if (busy) return
     let reason = ''
     if (!accept) {
-      reason = window.prompt('Please enter a reason for declining this request (required):')
+      reason = window.prompt('Please explain why you are rejecting this booking (required):')
       if (reason === null) return
       if (!reason.trim()) {
-        alert('A rejection reason is required.')
+        alert('Please explain why you are rejecting this booking. A rejection reason is required.')
         return
       }
     }

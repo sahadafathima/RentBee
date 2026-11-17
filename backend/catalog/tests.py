@@ -1158,6 +1158,34 @@ class UserItemCreationTests(TestCase):
         ids = [it["id"] for it in browse_res.data["results"]]
         self.assertIn(item_id, ids)
 
+    def test_item_detail_serializes_is_owner(self):
+        from decimal import Decimal
+        item = Item.objects.create(
+            name="Professional Tripod",
+            owner=self.user,
+            category=self.category,
+            rental_price=Decimal("150.00"),
+            stock=1
+        )
+        # 1. Item Owner views own item -> is_owner is True
+        self.client.force_authenticate(user=self.user)
+        res_owner = self.client.get(f"/api/items/{item.id}/")
+        self.assertEqual(res_owner.status_code, status.HTTP_200_OK)
+        self.assertTrue(res_owner.data.get("is_owner"))
+
+        # 2. Other authenticated user views item -> is_owner is False
+        other_user = get_user_model().objects.create_user(email="other_renter@test.com", password="Password123!")
+        self.client.force_authenticate(user=other_user)
+        res_other = self.client.get(f"/api/items/{item.id}/")
+        self.assertEqual(res_other.status_code, status.HTTP_200_OK)
+        self.assertFalse(res_other.data.get("is_owner"))
+
+        # 3. Unauthenticated guest views item -> is_owner is False
+        anon_client = APIClient()
+        res_anon = anon_client.get(f"/api/items/{item.id}/")
+        self.assertEqual(res_anon.status_code, status.HTTP_200_OK)
+        self.assertFalse(res_anon.data.get("is_owner"))
+
 
 
 

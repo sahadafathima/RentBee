@@ -3,11 +3,13 @@ import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import Navbar from '../Components/Navbar'
 import Footer from '../Components/Footer'
 import WishlistHeartButton from '../Components/WishlistHeartButton'
+import useCurrentUserId from '../hooks/useCurrentUserId'
 import {
   getPublicItem,
   getPublicItems,
   checkItemAvailability,
   requestAvailabilityNotification,
+  checkDiscountEligibility,
 } from '../services/api'
 import { calculateRentalDuration, getNextDayStr } from '../utils/dateUtils'
 import { getAccessToken } from '../services/authentication'
@@ -25,6 +27,7 @@ import {
   RefreshCw,
   Info,
   CheckCircle2,
+  Tag,
 } from 'lucide-react'
 
 // Normalizes image URLs whether absolute or relative to backend media host
@@ -44,6 +47,9 @@ export default function ItemDetails() {
   const [item, setItem] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  const viewerId = useCurrentUserId()
+  const isOwner = Boolean(item?.is_owner || (viewerId && item?.owner && viewerId === item.owner))
 
   // Image gallery states
   const [selectedImage, setSelectedImage] = useState(null)
@@ -71,6 +77,23 @@ export default function ItemDetails() {
   const [relatedItems, setRelatedItems] = useState([])
   const [ownerItems, setOwnerItems] = useState([])
   const [alsoLikeItems, setAlsoLikeItems] = useState([])
+
+  // First Booking Discount Eligibility
+  const [discountEligibility, setDiscountEligibility] = useState(null)
+
+  useEffect(() => {
+    let isCurrent = true
+    checkDiscountEligibility()
+      .then((data) => {
+        if (isCurrent) setDiscountEligibility(data)
+      })
+      .catch(() => {
+        if (isCurrent) setDiscountEligibility({ is_eligible: false })
+      })
+    return () => {
+      isCurrent = false
+    }
+  }, [])
 
   // Retry trigger
   const [reloadToken, setReloadToken] = useState(0)
@@ -550,140 +573,203 @@ export default function ItemDetails() {
                     <span>Stock available:</span>
                     <span className="font-bold text-[#352720]">{item.stock} item(s)</span>
                   </div>
+
+                  {/* First Booking 10% Discount Offer Banner */}
+                  {(discountEligibility?.is_eligible || !viewerId) && (
+                    <div className="mt-3 rounded-xl bg-gradient-to-r from-emerald-50 to-amber-50 border border-emerald-200 p-2.5 flex items-center justify-between gap-2 shadow-2xs">
+                      <div className="flex items-center gap-2">
+                        <Tag size={15} className="text-emerald-600 shrink-0" />
+                        <span className="text-xs font-bold text-emerald-950">
+                          First Booking Offer: 10% OFF
+                        </span>
+                      </div>
+                      <span className="rounded-full bg-emerald-600 text-white font-extrabold text-[10px] px-2 py-0.5 tracking-wide">
+                        10% OFF
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Rental Date Selection */}
-                <div className="mt-4 rounded-2xl bg-[#FFF9F5] border border-orange-100 p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-[#352720]">
-                      <Calendar size={14} className="text-[#D97745]" />
-                      <span>Rental Dates</span>
+                {/* Owner Notice Banner: Displayed before the date-selection & booking section */}
+                {isOwner && (
+                  <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-[#7A4C32] flex items-start gap-3 shadow-xs">
+                    <Info size={18} className="text-[#D97745] shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-bold text-[#352720] text-sm">This is your product.</h3>
+                      <p className="mt-0.5 text-xs text-gray-600 leading-relaxed">
+                        You are the owner of this listing. Rental booking is disabled for your own equipment.
+                      </p>
+                      <div className="mt-3">
+                        <Link
+                          to="/my-listings"
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#D97745] px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#B85D32] transition cursor-pointer"
+                        >
+                          <span>Manage Listing</span>
+                        </Link>
+                      </div>
                     </div>
-                    {checkingAvailability && (
-                      <span className="text-[11px] text-gray-500 animate-pulse">Checking availability...</span>
-                    )}
                   </div>
+                )}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-gray-600 mb-1">Start Date</label>
-                      <input
-                        type="date"
-                        min={todayStr}
-                        value={startDate}
-                        onChange={(e) => {
-                          setStartDate(e.target.value)
-                          setAvailabilityResult(null)
-                          setNotifySuccess(false)
-                          setNotifyMessage('')
-                          setNotifyError('')
-                          if (endDate && e.target.value >= endDate) {
-                            setEndDate(getNextDayStr(e.target.value))
+                {/* Booking Controls: Hidden for owner, active for all other users & guests */}
+                {!isOwner && (
+                  <>
+                    {/* Rental Date Selection */}
+                    <div className="mt-4 rounded-2xl bg-[#FFF9F5] border border-orange-100 p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-[#352720]">
+                          <Calendar size={14} className="text-[#D97745]" />
+                          <span>Rental Dates</span>
+                        </div>
+                        {checkingAvailability && (
+                          <span className="text-[11px] text-gray-500 animate-pulse">Checking availability...</span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">Start Date</label>
+                          <input
+                            type="date"
+                            min={todayStr}
+                            value={startDate}
+                            onChange={(e) => {
+                              setStartDate(e.target.value)
+                              setAvailabilityResult(null)
+                              setNotifySuccess(false)
+                              setNotifyMessage('')
+                              setNotifyError('')
+                              if (endDate && e.target.value >= endDate) {
+                                setEndDate(getNextDayStr(e.target.value))
+                              }
+                            }}
+                            className="w-full rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-xs text-[#352720] outline-none focus:border-[#D97745]"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">End Date</label>
+                          <input
+                            type="date"
+                            min={getNextDayStr(startDate) || todayStr}
+                            value={endDate}
+                            onChange={(e) => {
+                              setEndDate(e.target.value)
+                              setAvailabilityResult(null)
+                              setNotifySuccess(false)
+                              setNotifyMessage('')
+                              setNotifyError('')
+                            }}
+                            className="w-full rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-xs text-[#352720] outline-none focus:border-[#D97745]"
+                          />
+                        </div>
+                      </div>
+
+                      {hasSelectedDates && !isDateRangeInvalid && (
+                        <div className="mt-2.5 pt-2 border-t border-orange-100 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-500">
+                              Duration: <strong className="text-[#352720]">{durationDays} day(s)</strong>
+                            </span>
+                            <span className="text-gray-500">
+                              Rental: <strong className={discountEligibility?.is_eligible ? 'line-through text-gray-400' : 'text-[#352720]'}>
+                                ₹{(rentalPrice * durationDays).toFixed(2)}
+                              </strong>
+                            </span>
+                          </div>
+                          {discountEligibility?.is_eligible && (
+                            <div className="flex items-center justify-between text-emerald-700 font-semibold">
+                              <span className="inline-flex items-center gap-1 text-[11px]">
+                                <Sparkles size={12} className="text-emerald-600" /> First Booking (10% OFF):
+                              </span>
+                              <span>-₹{(rentalPrice * durationDays * 0.10).toFixed(2)}</span>
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between pt-1 border-t border-orange-50 font-bold">
+                            <span className="text-gray-600 text-xs">Estimated Total:</span>
+                            <span className="text-[#9D4C29] text-sm">
+                              ₹{(
+                                (rentalPrice * durationDays * (discountEligibility?.is_eligible ? 0.90 : 1.0)) +
+                                (parseFloat(item.deposit || 0))
+                              ).toFixed(2)}
+                              <span className="text-[10px] font-normal text-gray-400 block text-right">(incl. deposit)</span>
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Availability Status Feedback */}
+                      {activeAvailabilityResult && !activeAvailabilityResult.is_available && (
+                        <div className="mt-2.5 rounded-xl bg-orange-100/70 border border-orange-200 p-2.5 text-xs text-[#7A4C32] flex items-start gap-2">
+                          <AlertCircle size={15} className="text-[#D97745] shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-bold text-[#352720]">Booked for Selected Dates</p>
+                            <p className="mt-0.5 text-gray-600">
+                              {activeAvailabilityResult.message || 'This item is already booked or reserved for these dates. Click Notify Me below to get an alert when it opens up.'}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {notifyError && (
+                        <p className="mt-2 text-xs font-semibold text-rose-600 flex items-center gap-1.5">
+                          <AlertCircle size={13} /> {notifyError}
+                        </p>
+                      )}
+
+                      {notifySuccess && (
+                        <div className="mt-2.5 rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800 flex items-start gap-2">
+                          <CheckCircle2 size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-bold text-emerald-900">Notification Request Registered!</p>
+                            <p className="mt-0.5 text-emerald-700">
+                              {notifyMessage || "We'll notify you as soon as these dates become available."}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CTAs: Rent Now (if Available) OR Notify Me (if Booked) + Wishlist Button */}
+                    <div className="mt-6 flex items-center gap-3">
+                      {isAvailable ? (
+                        <Link
+                          to={
+                            hasSelectedDates
+                              ? `/request-booking/${item.id}?start_date=${startDate}&end_date=${endDate}`
+                              : `/request-booking/${item.id}`
                           }
-                        }}
-                        className="w-full rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-xs text-[#352720] outline-none focus:border-[#D97745]"
+                          className="flex items-center justify-center gap-2 flex-1 rounded-2xl bg-[#D97745] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#B85D32] active:scale-[0.99] cursor-pointer"
+                        >
+                          <Sparkles size={16} />
+                          <span>Rent Now</span>
+                        </Link>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleNotifyMe}
+                          disabled={notifying || notifySuccess}
+                          className="flex items-center justify-center gap-2 flex-1 rounded-2xl border border-orange-200 bg-[#FFF0E7] px-6 py-3.5 text-sm font-bold text-[#D97745] shadow-xs transition hover:bg-[#FFE3D1] active:scale-[0.99] cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+                        >
+                          <Bell size={16} />
+                          <span>
+                            {notifySuccess
+                              ? 'Notification Request Registered'
+                              : notifying
+                                ? 'Registering...'
+                                : 'Notify Me When Available'}
+                          </span>
+                        </button>
+                      )}
+
+                      <WishlistHeartButton
+                        item={item}
+                        size={18}
+                        className="h-12 w-12 rounded-2xl border border-orange-200 bg-white"
                       />
                     </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-gray-600 mb-1">End Date</label>
-                      <input
-                        type="date"
-                        min={getNextDayStr(startDate) || todayStr}
-                        value={endDate}
-                        onChange={(e) => {
-                          setEndDate(e.target.value)
-                          setAvailabilityResult(null)
-                          setNotifySuccess(false)
-                          setNotifyMessage('')
-                          setNotifyError('')
-                        }}
-                        className="w-full rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-xs text-[#352720] outline-none focus:border-[#D97745]"
-                      />
-                    </div>
-                  </div>
-
-                  {hasSelectedDates && !isDateRangeInvalid && (
-                    <div className="mt-2.5 pt-2 border-t border-orange-100 flex items-center justify-between text-xs">
-                      <span className="text-gray-500">
-                        Duration: <strong className="text-[#352720]">{durationDays} day(s)</strong>
-                      </span>
-                      <span className="text-gray-500">
-                        Estimated Total: <strong className="text-[#9D4C29]">₹{(rentalPrice * durationDays).toFixed(2)}</strong>
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Availability Status Feedback */}
-                  {activeAvailabilityResult && !activeAvailabilityResult.is_available && (
-                    <div className="mt-2.5 rounded-xl bg-orange-100/70 border border-orange-200 p-2.5 text-xs text-[#7A4C32] flex items-start gap-2">
-                      <AlertCircle size={15} className="text-[#D97745] shrink-0 mt-0.5" />
-                      <div>
-                        <p className="font-bold text-[#352720]">Booked for Selected Dates</p>
-                        <p className="mt-0.5 text-gray-600">
-                          {activeAvailabilityResult.message || 'This item is already booked or reserved for these dates. Click Notify Me below to get an alert when it opens up.'}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {notifyError && (
-                    <p className="mt-2 text-xs font-semibold text-rose-600 flex items-center gap-1.5">
-                      <AlertCircle size={13} /> {notifyError}
-                    </p>
-                  )}
-
-                  {notifySuccess && (
-                    <div className="mt-2.5 rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800 flex items-start gap-2">
-                      <CheckCircle2 size={15} className="text-emerald-600 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="font-bold text-emerald-900">Notification Request Registered!</p>
-                        <p className="mt-0.5 text-emerald-700">
-                          {notifyMessage || "We'll notify you as soon as these dates become available."}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* CTAs: Rent Now (if Available) OR Notify Me (if Booked) + Wishlist Button */}
-                <div className="mt-6 flex items-center gap-3">
-                  {isAvailable ? (
-                    <Link
-                      to={
-                        hasSelectedDates
-                          ? `/request-booking/${item.id}?start_date=${startDate}&end_date=${endDate}`
-                          : `/request-booking/${item.id}`
-                      }
-                      className="flex items-center justify-center gap-2 flex-1 rounded-2xl bg-[#D97745] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#B85D32] active:scale-[0.99] cursor-pointer"
-                    >
-                      <Sparkles size={16} />
-                      <span>Rent Now</span>
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleNotifyMe}
-                      disabled={notifying || notifySuccess}
-                      className="flex items-center justify-center gap-2 flex-1 rounded-2xl border border-orange-200 bg-[#FFF0E7] px-6 py-3.5 text-sm font-bold text-[#D97745] shadow-xs transition hover:bg-[#FFE3D1] active:scale-[0.99] cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
-                    >
-                      <Bell size={16} />
-                      <span>
-                        {notifySuccess
-                          ? 'Notification Request Registered'
-                          : notifying
-                            ? 'Registering...'
-                            : 'Notify Me When Available'}
-                      </span>
-                    </button>
-                  )}
-
-                  <WishlistHeartButton
-                    item={item}
-                    size={18}
-                    className="h-12 w-12 rounded-2xl border border-orange-200 bg-white"
-                  />
-                </div>
+                  </>
+                )}
 
                 {/* Trust Badges */}
                 <div className="mt-5 pt-4 border-t border-orange-50 grid grid-cols-2 gap-3 text-[11px] text-gray-500">

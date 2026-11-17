@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
-import { Calendar, ShieldCheck, UserCheck, AlertCircle, Clock, Package } from 'lucide-react'
+import { Calendar, ShieldCheck, UserCheck, AlertCircle, Clock, Package, Tag } from 'lucide-react'
+import ReturnCountdownTimer from './ReturnCountdownTimer'
 import { formatKolkataDateTime, calculateReturnCountdown } from '../utils/dateUtils'
 
 export default function BookingCard({ booking, onCancelClick }) {
@@ -14,8 +15,11 @@ export default function BookingCard({ booking, onCancelClick }) {
     duration_days,
     requested_quantity,
     rental_amount,
+    discount_amount,
     deposit_amount,
     total_amount,
+    payment_method,
+    payment_method_display,
     item,
     owner,
     rejection_reason,
@@ -63,6 +67,27 @@ export default function BookingCard({ booking, onCancelClick }) {
         }
       case 'cancelled':
       default:
+        if (booking.payment_status === 'refunded' || booking.refund_status === 'processed') {
+          return {
+            label: booking.payment_method === 'offline' ? 'Cancelled & Cash Returned' : 'Cancelled & Refunded',
+            className: 'bg-purple-50 text-purple-800 border-purple-200',
+            dot: 'bg-purple-600',
+          }
+        }
+        if (booking.refund_status === 'pending' || (booking.payment_method === 'offline' && booking.payment_status === 'paid')) {
+          return {
+            label: booking.payment_method === 'offline' ? 'Cancelled (Cash Return Pending)' : 'Cancelled (Refund Processing)',
+            className: 'bg-amber-50 text-amber-800 border-amber-200',
+            dot: 'bg-amber-500',
+          }
+        }
+        if (booking.refund_status === 'failed') {
+          return {
+            label: 'Cancelled (Refund Failed)',
+            className: 'bg-rose-100 text-rose-900 border-rose-300',
+            dot: 'bg-rose-600',
+          }
+        }
         return {
           label: 'Cancelled by You',
           className: 'bg-rose-50 text-rose-800 border-rose-200',
@@ -76,7 +101,7 @@ export default function BookingCard({ booking, onCancelClick }) {
   return (
     <div className="rounded-3xl border border-orange-100 bg-white p-5 sm:p-6 shadow-xs transition hover:shadow-md">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-        
+
         {/* Left: Item Image & Primary Details */}
         <div className="flex flex-1 flex-col gap-4 sm:flex-row sm:items-center">
           {/* Image */}
@@ -104,6 +129,9 @@ export default function BookingCard({ booking, onCancelClick }) {
               <span className="text-gray-300">•</span>
               <span className="font-mono font-medium text-gray-500">
                 {booking_reference}
+              </span>
+              <span className="rounded bg-orange-50 border border-orange-200 px-2 py-0.5 text-[10px] font-semibold text-[#9D4C29]">
+                {payment_method_display || (payment_method === 'offline' ? 'Pay at Pickup' : 'Online')}
               </span>
             </div>
 
@@ -145,20 +173,7 @@ export default function BookingCard({ booking, onCancelClick }) {
             </div>
 
             {/* In-progress Return Deadline & Countdown */}
-            {status === 'rental_in_progress' && (booking.return_deadline || booking.return_deadline_display) && (
-              <div className="mt-2.5 rounded-xl bg-[#FFF9F5] border border-orange-200/80 p-2.5 text-xs text-[#352720] space-y-1">
-                <div className="flex items-center gap-1.5 font-bold text-[#9D4C29]">
-                  <Clock size={12} />
-                  <span>Return Deadline: {booking.return_deadline_display || formatKolkataDateTime(booking.return_deadline)}</span>
-                </div>
-                <div className="text-[11px] text-gray-500 flex flex-wrap items-center justify-between gap-1">
-                  <span>Picked up: {booking.picked_up_at_display || formatKolkataDateTime(booking.picked_up_at)}</span>
-                  <span className={`font-semibold ${calculateReturnCountdown(booking.return_deadline).isOverdue ? 'text-rose-600' : 'text-emerald-700'}`}>
-                    {calculateReturnCountdown(booking.return_deadline).text}
-                  </span>
-                </div>
-              </div>
-            )}
+            <ReturnCountdownTimer booking={booking} compact={true} />
           </div>
         </div>
 
@@ -174,6 +189,13 @@ export default function BookingCard({ booking, onCancelClick }) {
             <div className="text-lg sm:text-xl font-black text-[#9D4C29]">
               ₹{total_amount}
             </div>
+            {parseFloat(discount_amount || 0) > 0 && (
+              <div className="mt-0.5">
+                <span className="inline-flex items-center gap-1 rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                  <Tag size={10} className="text-emerald-600" /> 10% First Booking Off
+                </span>
+              </div>
+            )}
             <div className="text-[11px] text-gray-500">
               (Rental: ₹{rental_amount} + Deposit: ₹{deposit_amount})
             </div>
@@ -181,6 +203,16 @@ export default function BookingCard({ booking, onCancelClick }) {
         </div>
 
       </div>
+
+      {/* Waiting for Pickup OTP Notice for Renter */}
+      {status === 'waiting_for_pickup' && (
+        <div className="mt-3 rounded-xl bg-orange-50/70 border border-orange-200/60 p-2.5 text-xs text-[#352720] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[11px] text-[#9D4C29]">
+            <ShieldCheck size={14} className="text-[#D97745] shrink-0" />
+            <span>Pickup OTP will be sent to your mobile ({booking.renter_phone_masked || 'via SMS'}) when the host initiates handover.</span>
+          </div>
+        </div>
+      )}
 
       {/* Rejection / Cancellation note if present */}
       {(rejection_reason || cancellation_reason) && (
@@ -195,9 +227,43 @@ export default function BookingCard({ booking, onCancelClick }) {
         </div>
       )}
 
+      {/* Refund status indicator on card when cancelled */}
+      {status === 'cancelled' && (booking.payment_method === 'online' || booking.payment_status === 'paid' || booking.refund_status) && (
+        <div className="mt-3">
+          {(booking.payment_status === 'refunded' || booking.refund_status === 'processed') ? (
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-900 flex items-center justify-between">
+              <span className="font-semibold">
+                ✓ 100% Refunded (₹{booking.refund_amount || total_amount})
+              </span>
+              {booking.refund_transaction_id && (
+                <span className="text-[10px] text-emerald-700 font-mono">
+                  Ref: {booking.refund_transaction_id}
+                </span>
+              )}
+            </div>
+          ) : booking.refund_status === 'failed' ? (
+            <div className="rounded-xl bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-900 flex items-center justify-between">
+              <span className="font-semibold">
+                ⚠ Refund Failed (₹{booking.refund_amount || total_amount})
+              </span>
+              <span className="text-[10px] text-rose-700">See details to retry</span>
+            </div>
+          ) : (booking.refund_status === 'pending' || (booking.payment_method === 'offline' && booking.payment_status === 'paid')) ? (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-900 flex items-center justify-between">
+              <span className="font-semibold">
+                ⏳ {booking.payment_method === 'offline' ? 'Cash Return Pending' : 'Refund Processing'} (₹{booking.refund_amount || total_amount})
+              </span>
+              <span className="text-[10px] text-amber-700">
+                {booking.payment_method === 'offline' ? 'Host return pending' : 'Razorpay clearance pending'}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      )}
+
       {/* Bottom Section: Dynamic Action Buttons */}
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-orange-100/80 pt-4">
-        
+
         {/* Helper info or reassurance */}
         <div className="text-xs text-gray-400 flex items-center gap-1.5">
           <ShieldCheck size={14} className="text-emerald-600" />
@@ -206,28 +272,45 @@ export default function BookingCard({ booking, onCancelClick }) {
 
         {/* Dynamic Buttons per Status */}
         <div className="flex flex-wrap items-center gap-2">
-          
-          {/* Waiting for Owner Approval: [Cancel Request] */}
+
+          {/* Waiting for Owner Approval: [View Details] [Cancel Request] */}
           {status === 'pending_approval' && (
-            <button
-              type="button"
-              onClick={() => onCancelClick(booking)}
-              className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition cursor-pointer"
-            >
-              Cancel Request
-            </button>
+            <>
+              <Link
+                to={`/bookings/${id}`}
+                className="rounded-xl border border-orange-200 bg-white px-4 py-2 text-xs font-semibold text-[#49362D] hover:bg-orange-50 transition"
+              >
+                View Details
+              </Link>
+              <button
+                type="button"
+                onClick={() => onCancelClick(booking)}
+                className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+              >
+                Cancel Request
+              </button>
+            </>
           )}
 
-          {/* Waiting for Pickup: [Cancel Booking] */}
+          {/* Waiting for Pickup: [View Details] [Cancel Booking] */}
           {status === 'waiting_for_pickup' && (
-            <button
-              type="button"
-              onClick={() => onCancelClick(booking)}
-              className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition cursor-pointer"
-            >
-              Cancel Booking
-            </button>
+            <>
+              <Link
+                to={`/bookings/${id}`}
+                className="rounded-xl border border-orange-200 bg-white px-4 py-2 text-xs font-semibold text-[#49362D] hover:bg-orange-50 transition"
+              >
+                View Details
+              </Link>
+              <button
+                type="button"
+                onClick={() => onCancelClick(booking)}
+                className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+              >
+                Cancel Booking
+              </button>
+            </>
           )}
+
 
           {/* Rental in Progress: [View Details] [Report Any Problem] */}
           {status === 'rental_in_progress' && (

@@ -118,6 +118,9 @@ if 'test' in sys.argv:
             'NAME': ':memory:',
         }
     }
+    PASSWORD_HASHERS = [
+        'django.contrib.auth.hashers.MD5PasswordHasher',
+    ]
 else:
     DATABASES = {
         'default': {
@@ -174,9 +177,29 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-# Email Configuration — Development Testing
-
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# Centralized Real Email Delivery via Gmail SMTP Configuration
+# Uses real SMTP delivery by default; never silently falls back to console delivery.
+EMAIL_BACKEND = os.environ.get(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.smtp.EmailBackend'
+)
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+try:
+    EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
+except (ValueError, TypeError):
+    EMAIL_PORT = 587
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() in ('true', '1', 'yes')
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False').lower() in ('true', '1', 'yes')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.environ.get(
+    'DEFAULT_FROM_EMAIL',
+    f"RentBee <{os.environ.get('EMAIL_HOST_USER', 'noreply@rentbee.com')}>"
+)
+try:
+    EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 10))
+except (ValueError, TypeError):
+    EMAIL_TIMEOUT = 10
 
 
 REST_FRAMEWORK = {
@@ -222,5 +245,10 @@ if DEBUG:
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
 VAPID_CLAIM_EMAIL = os.environ.get('VAPID_CLAIM_EMAIL', 'mailto:support@rentbee.com')
+
+# Razorpay Payment Gateway Configuration
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
+RAZORPAY_WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
 
 

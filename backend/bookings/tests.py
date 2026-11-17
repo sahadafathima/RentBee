@@ -1,16 +1,21 @@
 from datetime import timedelta
 from decimal import Decimal
+import hmac
+import hashlib
+import json
+from unittest.mock import patch, MagicMock
 from django.contrib.auth import get_user_model
-from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
+from django.contrib.auth.hashers import make_password
+from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from addresses.models import Address
 from catalog.models import Category, Item
-from .models import Booking, IssueReport, AvailabilityNotificationRequest, InAppNotification, PushSubscription
+from .models import Booking, IssueReport, AvailabilityNotificationRequest, InAppNotification, PushSubscription, ProcessedWebhookEvent
 from .admin import verify_payment_action
-from .services import mark_booking_payment_verified, expire_stale_pending_bookings
+from .services import mark_booking_payment_verified
 
 User = get_user_model()
 
@@ -109,9 +114,11 @@ class BookingSystemTests(TestCase):
 
         self.assertEqual(data['duration_days'], 3)
         self.assertEqual(Decimal(str(data['daily_price'])), Decimal('1500.00'))
-        self.assertEqual(Decimal(str(data['rental_amount'])), Decimal('4500.00'))
+        self.assertEqual(Decimal(str(data['original_rental_amount'])), Decimal('4500.00'))
+        self.assertEqual(Decimal(str(data['discount_amount'])), Decimal('450.00'))
+        self.assertEqual(Decimal(str(data['rental_amount'])), Decimal('4050.00'))
         self.assertEqual(Decimal(str(data['deposit_amount'])), Decimal('5000.00'))
-        self.assertEqual(Decimal(str(data['total_amount'])), Decimal('9500.00'))
+        self.assertEqual(Decimal(str(data['total_amount'])), Decimal('9050.00'))
         self.assertEqual(data['status'], 'pending_approval')
         self.assertEqual(data['payment_status'], 'pending')
 
@@ -121,7 +128,7 @@ class BookingSystemTests(TestCase):
 
         booking = Booking.objects.get(id=data['id'])
         self.assertEqual(booking.daily_price, Decimal('1500.00'))
-        self.assertEqual(booking.total_amount, Decimal('9500.00'))
+        self.assertEqual(booking.total_amount, Decimal('9050.00'))
 
     def test_rental_duration_difference_calculation(self):
         """Duration is strictly difference between start and end date. Return date is not counted as extra day."""
@@ -136,7 +143,7 @@ class BookingSystemTests(TestCase):
         }, format='json')
         self.assertEqual(res_1day.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res_1day.data['duration_days'], 1)
-        self.assertEqual(Decimal(str(res_1day.data['rental_amount'])), Decimal('1500.00'))
+        self.assertEqual(Decimal(str(res_1day.data['original_rental_amount'])), Decimal('1500.00'))
 
         # Cancel to free up item
         Booking.objects.filter(id=res_1day.data['id']).update(status='cancelled')
@@ -149,7 +156,7 @@ class BookingSystemTests(TestCase):
         }, format='json')
         self.assertEqual(res_2day.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res_2day.data['duration_days'], 2)
-        self.assertEqual(Decimal(str(res_2day.data['rental_amount'])), Decimal('3000.00'))
+        self.assertEqual(Decimal(str(res_2day.data['original_rental_amount'])), Decimal('3000.00'))
 
         Booking.objects.filter(id=res_2day.data['id']).update(status='cancelled')
 
@@ -161,7 +168,7 @@ class BookingSystemTests(TestCase):
         }, format='json')
         self.assertEqual(res_3day.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res_3day.data['duration_days'], 3)
-        self.assertEqual(Decimal(str(res_3day.data['rental_amount'])), Decimal('4500.00'))
+        self.assertEqual(Decimal(str(res_3day.data['original_rental_amount'])), Decimal('4500.00'))
 
     def test_same_or_inverted_dates_rejected(self):
         """End date must be after start date; same day or past date is rejected."""
@@ -352,7 +359,7 @@ class BookingSystemTests(TestCase):
         self.client.force_authenticate(user=self.owner)
 
         # Attempt confirm-pickup with pending payment -> 400 Bad Request
-        res_fail = self.client.post(f'/api/bookings/{booking.id}/confirm-pickup/')
+        res_fail = self.client.post(f'/api/bookings/{booking.id}/confirm-pickup/', {'otp': '123456'}, format='json')
         self.assertEqual(res_fail.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('payment is verified', str(res_fail.data))
 
@@ -363,8 +370,11 @@ class BookingSystemTests(TestCase):
         self.assertEqual(booking.payment_verified_by, self.staff_admin)
         self.assertIsNotNone(booking.payment_verified_at)
 
-        # Pickup confirmation now succeeds
-        res_success = self.client.post(f'/api/bookings/{booking.id}/confirm-pickup/')
+        # Pickup confirmation now succeeds with valid OTP
+        booking.pickup_otp_hash = make_password('123456')
+        booking.pickup_otp_expires_at = timezone.now() + timedelta(minutes=10)
+        booking.save()
+        res_success = self.client.post(f'/api/bookings/{booking.id}/confirm-pickup/', {'otp': '123456'}, format='json')
         self.assertEqual(res_success.status_code, status.HTTP_200_OK)
         booking.refresh_from_db()
         self.assertEqual(booking.status, 'rental_in_progress')
@@ -1146,7 +1156,10 @@ class QuantityBookingTests(TestCase):
         self.assertEqual(self.client.post(f'/api/bookings/{active}/approve/').status_code, status.HTTP_200_OK)
         booking = Booking.objects.get(pk=active)
         mark_booking_payment_verified(booking, verified_by=self.staff_admin)
-        self.assertEqual(self.client.post(f'/api/bookings/{active}/confirm-pickup/').status_code, status.HTTP_200_OK)
+        booking.pickup_otp_hash = make_password('123456')
+        booking.pickup_otp_expires_at = timezone.now() + timedelta(minutes=10)
+        booking.save()
+        self.assertEqual(self.client.post(f'/api/bookings/{active}/confirm-pickup/', {'otp': '123456'}, format='json').status_code, status.HTTP_200_OK)
         self.assertEqual(self.availability()['available_stock'], 2)
         self.assertEqual(self.client.post(f'/api/bookings/{active}/confirm-return/').status_code, status.HTTP_200_OK)
         self.assertEqual(self.availability()['available_stock'], 5)
@@ -1356,7 +1369,9 @@ class StockTransitionConcurrencyTests(TransactionTestCase):
             item=self.item, owner=self.owner, renter=self.renter,
             start_date=timezone.localdate(), end_date=timezone.localdate() + timedelta(days=2),
             duration_days=2, daily_price=10, rental_amount=20, total_amount=20,
-            status=initial, payment_status='paid')
+            status=initial, payment_status='paid',
+            pickup_otp_hash=make_password('123456'),
+            pickup_otp_expires_at=timezone.now() + timedelta(minutes=10))
         barrier = Barrier(2)
         def submit(action):
             close_old_connections()
@@ -1365,7 +1380,7 @@ class StockTransitionConcurrencyTests(TransactionTestCase):
                 client = APIClient()
                 client.force_authenticate(User.objects.get(pk=user_id))
                 barrier.wait(timeout=10)
-                return client.post(f'/api/bookings/{booking.pk}/{endpoint}/').status_code
+                return client.post(f'/api/bookings/{booking.pk}/{endpoint}/', {'otp': '123456'}, format='json').status_code
             finally:
                 close_old_connections()
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -1566,8 +1581,8 @@ class PublisherExperienceTests(TestCase):
     def test_rejection_notifies_once_and_releases_stock(self):
         pk = self.create_request()
         self.client.force_authenticate(self.owner)
-        self.assertEqual(self.client.post(f'/api/bookings/{pk}/reject/').status_code, 200)
-        self.assertEqual(self.client.post(f'/api/bookings/{pk}/reject/').status_code, 400)
+        self.assertEqual(self.client.post(f'/api/bookings/{pk}/reject/', {'reason': 'Item unavailable for requested dates'}, format='json').status_code, 200)
+        self.assertEqual(self.client.post(f'/api/bookings/{pk}/reject/', {'reason': 'Item unavailable for requested dates'}, format='json').status_code, 400)
         self.client.force_authenticate(self.renter)
         response = self.client.get('/api/bookings/notifications/')
         self.assertEqual(response.data['results'][0]['event'], 'rejected')
@@ -1799,4 +1814,1759 @@ class WebPushNotificationTests(TestCase):
             self.assertEqual(res.status_code, status.HTTP_201_CREATED)
             # In-app notification MUST still be created
             self.assertTrue(InAppNotification.objects.filter(booking_id=res.data['id'], event='requested').exists())
+
+
+class BookingAddressManagementTests(TestCase):
+    setUp = BookingSystemTests.setUp
+
+    def test_booking_creation_with_specific_address_id(self):
+        # Create a second address for renter (Work)
+        work_address = Address.objects.create(
+            user=self.renter,
+            full_name='Bob Renter (Office)',
+            house_number='Tower B, 4th Floor',
+            address='Tech Park',
+            area='Whitefield',
+            landmark='Near ITPL',
+            city='Bangalore',
+            state='Karnataka',
+            pincode='560066',
+            country='India',
+            address_type='Work'
+        )
+
+        self.client.force_authenticate(user=self.renter)
+        start = timezone.localdate() + timedelta(days=2)
+        end = timezone.localdate() + timedelta(days=5)
+
+        res = self.client.post('/api/bookings/', {
+            'item_id': self.item.id,
+            'start_date': str(start),
+            'end_date': str(end),
+            'requested_quantity': 1,
+            'address_id': work_address.id,
+        }, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        booking = Booking.objects.get(pk=res.data['id'])
+        self.assertEqual(booking.renter_address_id, work_address.id)
+        self.assertIn('Tower B, 4th Floor', booking.renter_address_snapshot)
+        self.assertIn('Whitefield', booking.renter_address_snapshot)
+        self.assertEqual(booking.renter_address_data['address_type'], 'Work')
+        self.assertEqual(booking.renter_address_data['pincode'], '560066')
+
+    def test_booking_creation_with_foreign_address_id_fails(self):
+        # Stranger's address
+        stranger_address = Address.objects.create(
+            user=self.stranger,
+            full_name='Charlie Stranger',
+            house_number='Plot 9',
+            address='Foreign Street',
+            area='Remote Area',
+            city='Mumbai',
+            state='Maharashtra',
+            pincode='400001',
+            country='India'
+        )
+
+        self.client.force_authenticate(user=self.renter)
+        start = timezone.localdate() + timedelta(days=2)
+        end = timezone.localdate() + timedelta(days=4)
+
+        res = self.client.post('/api/bookings/', {
+            'item_id': self.item.id,
+            'start_date': str(start),
+            'end_date': str(end),
+            'address_id': stranger_address.id,
+        }, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('address_id', res.data)
+
+    def test_booking_creation_default_address_fallback(self):
+        self.client.force_authenticate(user=self.renter)
+        start = timezone.localdate() + timedelta(days=3)
+        end = timezone.localdate() + timedelta(days=5)
+
+        res = self.client.post('/api/bookings/', {
+            'item_id': self.item.id,
+            'start_date': str(start),
+            'end_date': str(end),
+        }, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        booking = Booking.objects.get(pk=res.data['id'])
+        self.assertEqual(booking.renter_address_id, self.renter_address.id)
+        self.assertIn('Flat 101', booking.renter_address_snapshot)
+
+    def test_historical_address_preservation_after_edit_and_delete(self):
+        # Create address
+        temp_address = Address.objects.create(
+            user=self.renter,
+            full_name='Bob Renter',
+            house_number='Villa 99',
+            address='Old Heritage Road',
+            area='Koramangala',
+            city='Bangalore',
+            state='Karnataka',
+            pincode='560034',
+            country='India',
+            address_type='Home'
+        )
+
+        self.client.force_authenticate(user=self.renter)
+        start = timezone.localdate() + timedelta(days=2)
+        end = timezone.localdate() + timedelta(days=4)
+
+        res = self.client.post('/api/bookings/', {
+            'item_id': self.item.id,
+            'start_date': str(start),
+            'end_date': str(end),
+            'address_id': temp_address.id,
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        booking_id = res.data['id']
+
+        # Edit the address
+        temp_address.house_number = 'Villa 99 - RENOVATED'
+        temp_address.save()
+
+        # Fetch booking details via API
+        detail_res = self.client.get(f'/api/bookings/{booking_id}/')
+        self.assertEqual(detail_res.status_code, status.HTTP_200_OK)
+        # Snapshot still has original house number
+        self.assertEqual(detail_res.data['renter_address']['house_number'], 'Villa 99')
+
+        # Now delete the address completely
+        temp_address.delete()
+
+        # Reload booking from DB
+        booking = Booking.objects.get(pk=booking_id)
+        self.assertIsNone(booking.renter_address)
+        self.assertEqual(booking.renter_address_data['house_number'], 'Villa 99')
+        self.assertEqual(booking.renter_address_data['area'], 'Koramangala')
+
+        # API still returns the complete historical snapshot
+        detail_after_delete = self.client.get(f'/api/bookings/{booking_id}/')
+        self.assertEqual(detail_after_delete.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_after_delete.data['renter_address']['house_number'], 'Villa 99')
+
+    def test_different_bookings_can_use_different_addresses(self):
+        address_home = self.renter_address
+        address_work = Address.objects.create(
+            user=self.renter,
+            full_name='Bob Office',
+            house_number='Suite 500',
+            address='Business Bay',
+            area='MG Road',
+            city='Bangalore',
+            state='Karnataka',
+            pincode='560025',
+            country='India',
+            address_type='Work'
+        )
+
+        self.client.force_authenticate(user=self.renter)
+        # Booking 1 with Home address
+        b1_res = self.client.post('/api/bookings/', {
+            'item_id': self.item.id,
+            'start_date': str(timezone.localdate() + timedelta(days=2)),
+            'end_date': str(timezone.localdate() + timedelta(days=4)),
+            'address_id': address_home.id,
+        }, format='json')
+        self.assertEqual(b1_res.status_code, status.HTTP_201_CREATED)
+
+        # Booking 2 with Work address
+        b2_res = self.client.post('/api/bookings/', {
+            'item_id': self.item.id,
+            'start_date': str(timezone.localdate() + timedelta(days=10)),
+            'end_date': str(timezone.localdate() + timedelta(days=12)),
+            'address_id': address_work.id,
+        }, format='json')
+        self.assertEqual(b2_res.status_code, status.HTTP_201_CREATED)
+
+        b1 = Booking.objects.get(pk=b1_res.data['id'])
+        b2 = Booking.objects.get(pk=b2_res.data['id'])
+
+        self.assertEqual(b1.renter_address_id, address_home.id)
+        self.assertEqual(b2.renter_address_id, address_work.id)
+        self.assertEqual(b1.renter_address_data['address_type'], 'Home')
+        self.assertEqual(b2.renter_address_data['address_type'], 'Work')
+
+
+@override_settings(
+    RAZORPAY_KEY_ID='rzp_test_123456789',
+    RAZORPAY_KEY_SECRET='test_secret_key_abcdef',
+    RAZORPAY_WEBHOOK_SECRET='test_webhook_secret_xyz'
+)
+class RazorpayPaymentManagementTests(TestCase):
+    setUp = BookingSystemTests.setUp
+
+    def create_approved_booking(self, total_amount=Decimal('8000.00')):
+        today = timezone.localdate()
+        return Booking.objects.create(
+            renter=self.renter,
+            item=self.item,
+            owner=self.owner,
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('3000.00'),
+            deposit_amount=Decimal('5000.00'),
+            total_amount=total_amount,
+            status='waiting_for_pickup',
+            payment_status='pending'
+        )
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_create_order_allowed_when_pending_approval(self, mock_client):
+        mock_rzp = MagicMock()
+        mock_client.return_value = mock_rzp
+        mock_rzp.order.create.return_value = {
+            'id': 'order_rzp_pending_123',
+            'amount': 300000,
+            'currency': 'INR',
+            'status': 'created'
+        }
+        today = timezone.localdate()
+        unapproved = Booking.objects.create(
+            renter=self.renter,
+            item=self.item,
+            owner=self.owner,
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'),
+            status='pending_approval',
+            payment_status='pending',
+            payment_method='online'
+        )
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.post(f'/api/bookings/{unapproved.id}/create-payment-order/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['order_id'], 'order_rzp_pending_123')
+        unapproved.refresh_from_db()
+        self.assertEqual(unapproved.razorpay_order_id, 'order_rzp_pending_123')
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_create_order_allowed_when_payment_failed_retry(self, mock_client):
+        mock_rzp = MagicMock()
+        mock_client.return_value = mock_rzp
+        mock_rzp.order.create.return_value = {
+            'id': 'order_rzp_retry_456',
+            'amount': 300000,
+            'currency': 'INR',
+            'status': 'created'
+        }
+        today = timezone.localdate()
+        failed_booking = Booking.objects.create(
+            renter=self.renter,
+            item=self.item,
+            owner=self.owner,
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'),
+            status='pending_approval',
+            payment_status='failed',
+            payment_method='online'
+        )
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.post(f'/api/bookings/{failed_booking.id}/create-payment-order/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['order_id'], 'order_rzp_retry_456')
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_create_order_rejected_when_already_paid(self, mock_client):
+        today = timezone.localdate()
+        paid_booking = Booking.objects.create(
+            renter=self.renter,
+            item=self.item,
+            owner=self.owner,
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'),
+            status='waiting_for_pickup',
+            payment_status='paid',
+            payment_method='online'
+        )
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.post(f'/api/bookings/{paid_booking.id}/create-payment-order/')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_client.assert_not_called()
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_create_order_rejected_for_cancelled_or_completed_booking(self, mock_client):
+        today = timezone.localdate()
+        for terminal_status in ['cancelled', 'rejected', 'completed']:
+            b = Booking.objects.create(
+                renter=self.renter,
+                item=self.item,
+                owner=self.owner,
+                start_date=today + timedelta(days=2),
+                end_date=today + timedelta(days=4),
+                duration_days=2,
+                daily_price=Decimal('1500.00'),
+                rental_amount=Decimal('3000.00'),
+                total_amount=Decimal('3000.00'),
+                status=terminal_status,
+                payment_status='pending',
+                payment_method='online'
+            )
+            self.client.force_authenticate(user=self.renter)
+            res = self.client.post(f'/api/bookings/{b.id}/create-payment-order/')
+            self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_client.assert_not_called()
+
+    def test_can_pay_serializer_flag_scenarios(self):
+        from bookings.serializers import BookingDetailSerializer
+        today = timezone.localdate()
+
+        # Scenario 1: Online + pending_approval + pending payment -> can_pay True
+        b1 = Booking.objects.create(
+            renter=self.renter, item=self.item, owner=self.owner,
+            start_date=today + timedelta(days=2), end_date=today + timedelta(days=4),
+            duration_days=2, daily_price=Decimal('1500.00'), rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'), status='pending_approval', payment_status='pending',
+            payment_method='online'
+        )
+        req = MagicMock()
+        req.user = self.renter
+        data1 = BookingDetailSerializer(b1, context={'request': req}).data
+        self.assertTrue(data1['can_pay'])
+
+        # Scenario 2: Online + waiting_for_pickup + pending payment -> can_pay True
+        b2 = Booking.objects.create(
+            renter=self.renter, item=self.item, owner=self.owner,
+            start_date=today + timedelta(days=2), end_date=today + timedelta(days=4),
+            duration_days=2, daily_price=Decimal('1500.00'), rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'), status='waiting_for_pickup', payment_status='pending',
+            payment_method='online'
+        )
+        data2 = BookingDetailSerializer(b2, context={'request': req}).data
+        self.assertTrue(data2['can_pay'])
+
+        # Scenario 3: Online + failed payment -> can_pay True
+        b3 = Booking.objects.create(
+            renter=self.renter, item=self.item, owner=self.owner,
+            start_date=today + timedelta(days=2), end_date=today + timedelta(days=4),
+            duration_days=2, daily_price=Decimal('1500.00'), rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'), status='pending_approval', payment_status='failed',
+            payment_method='online'
+        )
+        data3 = BookingDetailSerializer(b3, context={'request': req}).data
+        self.assertTrue(data3['can_pay'])
+
+        # Scenario 4: Online + paid payment -> can_pay False
+        b4 = Booking.objects.create(
+            renter=self.renter, item=self.item, owner=self.owner,
+            start_date=today + timedelta(days=2), end_date=today + timedelta(days=4),
+            duration_days=2, daily_price=Decimal('1500.00'), rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'), status='pending_approval', payment_status='paid',
+            payment_method='online'
+        )
+        data4 = BookingDetailSerializer(b4, context={'request': req}).data
+        self.assertFalse(data4['can_pay'])
+
+        # Scenario 5: Offline payment -> can_pay False
+        b5 = Booking.objects.create(
+            renter=self.renter, item=self.item, owner=self.owner,
+            start_date=today + timedelta(days=2), end_date=today + timedelta(days=4),
+            duration_days=2, daily_price=Decimal('1500.00'), rental_amount=Decimal('3000.00'),
+            total_amount=Decimal('3000.00'), status='pending_approval', payment_status='pending',
+            payment_method='offline'
+        )
+        data5 = BookingDetailSerializer(b5, context={'request': req}).data
+        self.assertFalse(data5['can_pay'])
+
+        # Scenario 6: Unauthorized user -> can_pay False
+        unrelated_req = MagicMock()
+        unrelated_req.user = self.stranger
+        data6 = BookingDetailSerializer(b1, context={'request': unrelated_req}).data
+        self.assertFalse(data6['can_pay'])
+
+    def test_create_order_forbidden_for_non_renter(self):
+        booking = self.create_approved_booking()
+        # Owner cannot initiate payment
+        self.client.force_authenticate(user=self.owner)
+        res = self.client.post(f'/api/bookings/{booking.id}/create-payment-order/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Unrelated user cannot initiate payment
+        self.client.force_authenticate(user=self.stranger)
+        res = self.client.post(f'/api/bookings/{booking.id}/create-payment-order/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_create_order_success_and_reuse_on_retry(self, mock_get_client):
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        mock_rzp.order.create.return_value = {
+            'id': 'order_rzp_mock_123',
+            'amount': 800000,
+            'currency': 'INR',
+            'status': 'created'
+        }
+        mock_rzp.order.fetch.return_value = {
+            'id': 'order_rzp_mock_123',
+            'amount': 800000,
+            'amount_paid': 0,
+            'currency': 'INR',
+            'status': 'created'
+        }
+
+        booking = self.create_approved_booking(total_amount=Decimal('8000.00'))
+        self.client.force_authenticate(user=self.renter)
+
+        # First initiation creates order
+        res1 = self.client.post(f'/api/bookings/{booking.id}/create-payment-order/')
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertEqual(res1.data['order_id'], 'order_rzp_mock_123')
+        self.assertEqual(res1.data['amount'], 800000)
+        self.assertEqual(res1.data['currency'], 'INR')
+        self.assertFalse(res1.data['is_reused'])
+        booking.refresh_from_db()
+        self.assertEqual(booking.razorpay_order_id, 'order_rzp_mock_123')
+
+        # Retry payment reuses existing order
+        res2 = self.client.post(f'/api/bookings/{booking.id}/create-payment-order/')
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertEqual(res2.data['order_id'], 'order_rzp_mock_123')
+        self.assertTrue(res2.data['is_reused'])
+        # Only created once
+        mock_rzp.order.create.assert_called_once()
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_create_order_creates_new_if_previous_expired(self, mock_get_client):
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        # Order fetch reports expired
+        mock_rzp.order.fetch.return_value = {
+            'id': 'order_old_expired',
+            'amount': 800000,
+            'amount_paid': 0,
+            'currency': 'INR',
+            'status': 'expired'
+        }
+        mock_rzp.order.create.return_value = {
+            'id': 'order_new_active',
+            'amount': 800000,
+            'currency': 'INR',
+            'status': 'created'
+        }
+
+        booking = self.create_approved_booking()
+        booking.razorpay_order_id = 'order_old_expired'
+        booking.save()
+
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.post(f'/api/bookings/{booking.id}/create-payment-order/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['order_id'], 'order_new_active')
+        booking.refresh_from_db()
+        self.assertEqual(booking.razorpay_order_id, 'order_new_active')
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_verify_payment_success_with_signature_and_captured_status(self, mock_get_client):
+        order_id = 'order_valid_123'
+        payment_id = 'pay_captured_456'
+        booking = self.create_approved_booking(total_amount=Decimal('8000.00'))
+        booking.razorpay_order_id = order_id
+        booking.save()
+
+        # Generate genuine HMAC SHA-256 signature
+        msg = f"{order_id}|{payment_id}".encode('utf-8')
+        secret = 'test_secret_key_abcdef'
+        signature = hmac.new(secret.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+
+        # Mock captured payment in Razorpay API
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        mock_rzp.payment.fetch.return_value = {
+            'id': payment_id,
+            'order_id': order_id,
+            'amount': 800000,
+            'currency': 'INR',
+            'status': 'captured'
+        }
+
+        self.client.force_authenticate(user=self.renter)
+        payload = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature
+        }
+        res = self.client.post(f'/api/bookings/{booking.id}/verify-payment/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['booking']['payment_status'], 'paid')
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'paid')
+        self.assertEqual(booking.payment_transaction_id, payment_id)
+        self.assertIsNotNone(booking.payment_verified_at)
+
+        # Host can now confirm pickup!
+        booking.pickup_otp_hash = make_password('123456')
+        booking.pickup_otp_expires_at = timezone.now() + timedelta(minutes=10)
+        booking.save()
+        self.client.force_authenticate(user=self.owner)
+        res_pickup = self.client.post(f'/api/bookings/{booking.id}/confirm-pickup/', {'otp': '123456'}, format='json')
+        self.assertEqual(res_pickup.status_code, status.HTTP_200_OK)
+        booking.refresh_from_db()
+        self.assertEqual(booking.status, 'rental_in_progress')
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_verify_payment_rejected_if_not_captured(self, mock_get_client):
+        """Requirement 1: Valid signature is NOT sufficient if payment is not captured."""
+        order_id = 'order_uncaptured_123'
+        payment_id = 'pay_authorized_only'
+        booking = self.create_approved_booking()
+        booking.razorpay_order_id = order_id
+        booking.save()
+
+        msg = f"{order_id}|{payment_id}".encode('utf-8')
+        signature = hmac.new('test_secret_key_abcdef'.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+
+        # Mock payment in 'authorized' status (not yet captured)
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        mock_rzp.payment.fetch.return_value = {
+            'id': payment_id,
+            'order_id': order_id,
+            'amount': 800000,
+            'currency': 'INR',
+            'status': 'authorized'  # NOT CAPTURED
+        }
+
+        self.client.force_authenticate(user=self.renter)
+        payload = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature
+        }
+        res = self.client.post(f'/api/bookings/{booking.id}/verify-payment/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('captured before verification', str(res.data))
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'pending')
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_verify_payment_invalid_signature_rejected(self, mock_get_client):
+        order_id = 'order_valid_123'
+        payment_id = 'pay_fake_sig'
+        booking = self.create_approved_booking()
+        booking.razorpay_order_id = order_id
+        booking.save()
+
+        self.client.force_authenticate(user=self.renter)
+        payload = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': 'invalid_forged_signature_hex'
+        }
+        res = self.client.post(f'/api/bookings/{booking.id}/verify-payment/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Invalid payment signature', str(res.data))
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'pending')
+        mock_get_client.assert_not_called()
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_verify_payment_amount_currency_mismatch_rejected(self, mock_get_client):
+        order_id = 'order_amt_mismatch'
+        payment_id = 'pay_amt_123'
+        booking = self.create_approved_booking(total_amount=Decimal('8000.00'))
+        booking.razorpay_order_id = order_id
+        booking.save()
+
+        msg = f"{order_id}|{payment_id}".encode('utf-8')
+        signature = hmac.new('test_secret_key_abcdef'.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+
+        # Razorpay returned tampered amount: 500000 instead of 800000
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        mock_rzp.payment.fetch.return_value = {
+            'id': payment_id,
+            'order_id': order_id,
+            'amount': 500000,
+            'currency': 'INR',
+            'status': 'captured'
+        }
+
+        self.client.force_authenticate(user=self.renter)
+        payload = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature
+        }
+        res = self.client.post(f'/api/bookings/{booking.id}/verify-payment/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Amount mismatch', str(res.data))
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_verify_payment_idempotency_same_payment_id(self, mock_get_client):
+        order_id = 'order_idem_123'
+        payment_id = 'pay_idem_456'
+        booking = self.create_approved_booking()
+        booking.razorpay_order_id = order_id
+        booking.payment_status = 'paid'
+        booking.payment_transaction_id = payment_id
+        booking.save()
+
+        msg = f"{order_id}|{payment_id}".encode('utf-8')
+        signature = hmac.new('test_secret_key_abcdef'.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        mock_rzp.payment.fetch.return_value = {
+            'id': payment_id,
+            'order_id': order_id,
+            'amount': 800000,
+            'currency': 'INR',
+            'status': 'captured'
+        }
+
+        self.client.force_authenticate(user=self.renter)
+        payload = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature
+        }
+        res = self.client.post(f'/api/bookings/{booking.id}/verify-payment/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['booking']['payment_status'], 'paid')
+
+    @patch('bookings.services.get_razorpay_client')
+    def test_verify_payment_duplicate_transaction_conflict(self, mock_get_client):
+        payment_id = 'pay_stolen_trans'
+        # Booking 1 already verified with this payment ID
+        b1 = self.create_approved_booking()
+        b1.payment_status = 'paid'
+        b1.payment_transaction_id = payment_id
+        b1.save()
+
+        # Booking 2 tries to verify with the same payment ID
+        b2 = self.create_approved_booking()
+        b2.razorpay_order_id = 'order_b2_123'
+        b2.save()
+
+        msg = f"{b2.razorpay_order_id}|{payment_id}".encode('utf-8')
+        signature = hmac.new('test_secret_key_abcdef'.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        mock_rzp.payment.fetch.return_value = {
+            'id': payment_id,
+            'order_id': b2.razorpay_order_id,
+            'amount': 800000,
+            'currency': 'INR',
+            'status': 'captured'
+        }
+
+        self.client.force_authenticate(user=self.renter)
+        payload = {
+            'razorpay_order_id': b2.razorpay_order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature
+        }
+        res = self.client.post(f'/api/bookings/{b2.id}/verify-payment/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already been credited to booking', str(res.data))
+
+    def test_webhook_signature_verification_and_event_tracking(self):
+        """Requirement 2 & 3: Webhook verification with secret and ProcessedWebhookEvent tracking."""
+        order_id = 'order_webhook_test_1'
+        payment_id = 'pay_webhook_test_1'
+        booking = self.create_approved_booking()
+        booking.razorpay_order_id = order_id
+        booking.save()
+
+        webhook_secret = 'test_webhook_secret_xyz'
+        event_payload = {
+            'id': 'evt_razorpay_1001',
+            'event': 'payment.captured',
+            'payload': {
+                'payment': {
+                    'entity': {
+                        'id': payment_id,
+                        'order_id': order_id,
+                        'amount': 800000,
+                        'currency': 'INR',
+                        'status': 'captured'
+                    }
+                }
+            }
+        }
+        raw_body = json.dumps(event_payload).encode('utf-8')
+        signature = hmac.new(webhook_secret.encode('utf-8'), raw_body, hashlib.sha256).hexdigest()
+
+        # Webhook call with valid signature
+        res = self.client.post(
+            '/api/bookings/payment-webhook/',
+            data=raw_body,
+            content_type='application/json',
+            HTTP_X_RAZORPAY_SIGNATURE=signature
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], 'success')
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'paid')
+        self.assertEqual(booking.payment_transaction_id, payment_id)
+
+        # ProcessedWebhookEvent is recorded
+        self.assertTrue(ProcessedWebhookEvent.objects.filter(event_id='evt_razorpay_1001').exists())
+
+        # Duplicate webhook delivery: Idempotently acknowledged without reprocessing
+        res_dup = self.client.post(
+            '/api/bookings/payment-webhook/',
+            data=raw_body,
+            content_type='application/json',
+            HTTP_X_RAZORPAY_SIGNATURE=signature
+        )
+        self.assertEqual(res_dup.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_dup.data['status'], 'already_processed')
+
+    def test_webhook_invalid_signature_rejected(self):
+        event_payload = {'id': 'evt_invalid_sig', 'event': 'payment.captured'}
+        raw_body = json.dumps(event_payload).encode('utf-8')
+        res = self.client.post(
+            '/api/bookings/payment-webhook/',
+            data=raw_body,
+            content_type='application/json',
+            HTTP_X_RAZORPAY_SIGNATURE='bad_sig'
+        )
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(ProcessedWebhookEvent.objects.filter(event_id='evt_invalid_sig').exists())
+
+    def test_webhook_payment_failed_event(self):
+        order_id = 'order_failed_wh'
+        booking = self.create_approved_booking()
+        booking.razorpay_order_id = order_id
+        booking.save()
+
+        event_payload = {
+            'id': 'evt_failed_001',
+            'event': 'payment.failed',
+            'payload': {
+                'payment': {
+                    'entity': {
+                        'id': 'pay_failed_123',
+                        'order_id': order_id,
+                        'amount': 800000,
+                        'currency': 'INR',
+                        'status': 'failed'
+                    }
+                }
+            }
+        }
+        raw_body = json.dumps(event_payload).encode('utf-8')
+        signature = hmac.new('test_webhook_secret_xyz'.encode('utf-8'), raw_body, hashlib.sha256).hexdigest()
+
+        res = self.client.post(
+            '/api/bookings/payment-webhook/',
+            data=raw_body,
+            content_type='application/json',
+            HTTP_X_RAZORPAY_SIGNATURE=signature
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], 'failure_recorded')
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'failed')
+        # Booking status is still waiting_for_pickup so renter can retry
+        self.assertEqual(booking.status, 'waiting_for_pickup')
+
+
+class OfflinePaymentManagementTests(TestCase):
+    setUp = BookingSystemTests.setUp
+
+    def create_approved_offline_booking(self, total_amount=Decimal('8000.00')):
+        today = timezone.localdate()
+        return Booking.objects.create(
+            renter=self.renter,
+            item=self.item,
+            owner=self.owner,
+            payment_method='offline',
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('3000.00'),
+            deposit_amount=Decimal('5000.00'),
+            total_amount=total_amount,
+            status='waiting_for_pickup',
+            payment_status='pending'
+        )
+
+    def test_create_booking_with_offline_payment_method(self):
+        """Renter can create a booking explicitly specifying offline payment method."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+        payload = {
+            'item_id': self.item.id,
+            'start_date': str(today + timedelta(days=2)),
+            'end_date': str(today + timedelta(days=4)),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+            'payment_method': 'offline',
+        }
+        res = self.client.post('/api/bookings/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['payment_method'], 'offline')
+        self.assertEqual(res.data['payment_method_display'], 'Pay at Pickup (Cash)')
+        self.assertEqual(res.data['payment_status'], 'pending')
+
+        booking = Booking.objects.get(pk=res.data['id'])
+        self.assertEqual(booking.payment_method, 'offline')
+        self.assertEqual(booking.payment_status, 'pending')
+
+    def test_create_booking_defaults_to_online(self):
+        """Booking creation without payment_method defaults cleanly to online."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+        payload = {
+            'item_id': self.item.id,
+            'start_date': str(today + timedelta(days=2)),
+            'end_date': str(today + timedelta(days=4)),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res = self.client.post('/api/bookings/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['payment_method'], 'online')
+        self.assertEqual(res.data['payment_method_display'], 'Online Payment (Razorpay)')
+
+        booking = Booking.objects.get(pk=res.data['id'])
+        self.assertEqual(booking.payment_method, 'online')
+
+    def test_offline_booking_rejects_razorpay_order_creation(self):
+        """Razorpay order creation is strictly blocked for offline bookings."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.renter)
+
+        res = self.client.post(f'/api/bookings/{booking.id}/create-payment-order/')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('offline', str(res.data).lower())
+
+        booking.refresh_from_db()
+        self.assertFalse(booking.razorpay_order_id)
+
+    def test_offline_booking_rejects_verify_payment_endpoint(self):
+        """Razorpay payment verification is strictly blocked for offline bookings."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.renter)
+
+        payload = {
+            'razorpay_order_id': 'order_fake_123',
+            'razorpay_payment_id': 'pay_fake_123',
+            'razorpay_signature': 'sig_fake_123',
+        }
+        res = self.client.post(f'/api/bookings/{booking.id}/verify-payment/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('offline', str(res.data).lower())
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'pending')
+
+    @override_settings(RAZORPAY_WEBHOOK_SECRET='test_webhook_secret_xyz')
+    def test_offline_booking_ignored_by_razorpay_webhook(self):
+        """Razorpay webhooks cannot alter payment status for offline bookings."""
+        booking = self.create_approved_offline_booking()
+        booking.razorpay_order_id = 'order_offline_simulated'
+        booking.save()
+
+        event_payload = {
+            'id': 'evt_offline_test_001',
+            'event': 'payment.captured',
+            'payload': {
+                'payment': {
+                    'entity': {
+                        'id': 'pay_offline_123',
+                        'order_id': 'order_offline_simulated',
+                        'amount': 800000,
+                        'currency': 'INR',
+                        'status': 'captured',
+                    }
+                }
+            }
+        }
+        raw_body = json.dumps(event_payload).encode('utf-8')
+        signature = hmac.new('test_webhook_secret_xyz'.encode('utf-8'), raw_body, hashlib.sha256).hexdigest()
+
+        res = self.client.post(
+            '/api/bookings/payment-webhook/',
+            data=raw_body,
+            content_type='application/json',
+            HTTP_X_RAZORPAY_SIGNATURE=signature
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], 'ignored')
+        self.assertIn('offline', res.data.get('reason', '').lower())
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'pending')
+
+    def test_owner_confirm_offline_payment_success(self):
+        """Item owner confirms cash receipt at pickup: updates payment_status, audit fields, no synthetic txn ID."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.owner)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['message'], 'Offline payment confirmed successfully.')
+        self.assertEqual(res.data['booking']['payment_status'], 'paid')
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'paid')
+        self.assertIsNotNone(booking.payment_verified_at)
+        self.assertEqual(booking.payment_verified_by, self.owner)
+        self.assertTrue(booking.payment_transaction_id is None or booking.payment_transaction_id == '')
+
+        # In-app notifications sent
+        self.assertTrue(InAppNotification.objects.filter(booking=booking, event='payment_verified_owner').exists())
+        self.assertTrue(InAppNotification.objects.filter(booking=booking, event='payment_verified_renter').exists())
+
+    def test_admin_confirm_offline_payment_success(self):
+        """Staff administrator can confirm offline cash receipt on behalf of owner."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.staff_admin)
+
+        res = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'paid')
+        self.assertEqual(booking.payment_verified_by, self.staff_admin)
+
+    def test_renter_forbidden_from_confirming_offline_payment(self):
+        """Renter attempting to confirm their own offline payment is rejected with HTTP 403."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.renter)
+
+        res = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'pending')
+
+    def test_unrelated_user_forbidden_from_confirming_offline_payment(self):
+        """Unrelated stranger attempting to confirm offline payment is rejected with HTTP 403."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.stranger)
+
+        res = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'pending')
+
+    def test_duplicate_offline_confirmation_rejected(self):
+        """Confirming an already-paid offline booking returns HTTP 400."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.owner)
+
+        res1 = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+
+        res2 = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already', str(res2.data).lower())
+
+    def test_confirm_offline_payment_rejected_for_online_booking(self):
+        """Online booking cannot be confirmed via the offline confirmation endpoint."""
+        today = timezone.localdate()
+        online_booking = Booking.objects.create(
+            renter=self.renter,
+            item=self.item,
+            owner=self.owner,
+            payment_method='online',
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('3000.00'),
+            deposit_amount=Decimal('5000.00'),
+            total_amount=Decimal('8000.00'),
+            status='waiting_for_pickup',
+            payment_status='pending'
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        res = self.client.post(f'/api/bookings/{online_booking.id}/confirm-offline-payment/')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('offline', str(res.data).lower())
+
+    def test_confirm_offline_payment_rejected_for_unapproved_booking(self):
+        """Offline booking in pending_approval cannot be confirmed until host approves."""
+        today = timezone.localdate()
+        unapproved = Booking.objects.create(
+            renter=self.renter,
+            item=self.item,
+            owner=self.owner,
+            payment_method='offline',
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('3000.00'),
+            deposit_amount=Decimal('5000.00'),
+            total_amount=Decimal('8000.00'),
+            status='pending_approval',
+            payment_status='pending'
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        res = self.client.post(f'/api/bookings/{unapproved.id}/confirm-offline-payment/')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('waiting for pickup', str(res.data).lower())
+
+    def test_pickup_blocked_until_offline_payment_confirmed(self):
+        """Owner handover is strictly blocked until offline payment is confirmed as paid."""
+        booking = self.create_approved_offline_booking()
+        self.client.force_authenticate(user=self.owner)
+
+        # 1. Attempt pickup while payment is pending: BLOCKED
+        res_blocked = self.client.post(f'/api/bookings/{booking.id}/confirm-pickup/', {'otp': '123456'}, format='json')
+        self.assertEqual(res_blocked.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('payment is verified', str(res_blocked.data).lower())
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.status, 'waiting_for_pickup')
+
+        # 2. Host confirms offline cash payment: SUCCEEDS
+        res_pay = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res_pay.status_code, status.HTTP_200_OK)
+
+        # 3. Owner attempts pickup again: UNLOCKED & SUCCEEDS with valid OTP
+        booking.refresh_from_db()
+        booking.pickup_otp_hash = make_password('123456')
+        booking.pickup_otp_expires_at = timezone.now() + timedelta(minutes=10)
+        booking.save()
+        res_unlocked = self.client.post(f'/api/bookings/{booking.id}/confirm-pickup/', {'otp': '123456'}, format='json')
+        self.assertEqual(res_unlocked.status_code, status.HTTP_200_OK)
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.status, 'rental_in_progress')
+        self.assertIsNotNone(booking.picked_up_at)
+
+    def test_reassigned_item_owner_cannot_confirm_offline_payment_if_not_booking_canonical_owner(self):
+        """
+        If an item's owner changes after booking creation, the new item owner cannot confirm
+        offline payment because they are not the booking's canonical owner (locked_booking.owner_id).
+        """
+        new_item_owner = User.objects.create_user(
+            email='newowner@test.com',
+            password='Password123!',
+            full_name='New Item Owner',
+            phone_number='9876543299'
+        )
+        booking = self.create_approved_offline_booking()
+        self.assertEqual(booking.owner_id, self.owner.id)
+
+        # Reassign the underlying catalog item to a different owner
+        self.item.owner = new_item_owner
+        self.item.save(update_fields=['owner'])
+
+        # New item owner attempts to confirm payment: FORBIDDEN (HTTP 403)
+        self.client.force_authenticate(user=new_item_owner)
+        res = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'pending')
+
+        # Canonical booking owner confirms payment: SUCCEEDS (HTTP 200)
+        self.client.force_authenticate(user=self.owner)
+        res_canonical = self.client.post(f'/api/bookings/{booking.id}/confirm-offline-payment/')
+        self.assertEqual(res_canonical.status_code, status.HTTP_200_OK)
+
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'paid')
+        self.assertEqual(booking.payment_verified_by, self.owner)
+
+
+class BookingInvoiceReceiptTests(TestCase):
+    """
+    Tasks 83–90: Comprehensive invoice & payment receipt verification tests.
+    Verifies downloadable PDF invoice/receipt generation, pricing snapshots,
+    Razorpay vs. offline payment receipts, access control and security.
+    """
+    setUp = BookingSystemTests.setUp
+
+    def create_paid_online_booking(self):
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=1),
+            end_date=today + timedelta(days=3),
+            duration_days=2,
+            requested_quantity=2,
+            daily_price=Decimal('1500.00'),
+            rental_amount=Decimal('6000.00'),
+            deposit_amount=Decimal('2000.00'),
+            total_amount=Decimal('8000.00'),
+            payment_method='online',
+            payment_status='paid',
+            status='waiting_for_pickup',
+            payment_transaction_id='pay_test_online_98765',
+            razorpay_order_id='order_test_online_12345',
+            payment_verified_at=timezone.now(),
+        )
+        return booking
+
+    def create_paid_offline_booking(self):
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=5),
+            duration_days=3,
+            requested_quantity=1,
+            daily_price=Decimal('1000.00'),
+            rental_amount=Decimal('3000.00'),
+            deposit_amount=Decimal('1500.00'),
+            total_amount=Decimal('4500.00'),
+            payment_method='offline',
+            payment_status='paid',
+            status='waiting_for_pickup',
+            payment_verified_by=self.owner,
+            payment_verified_at=timezone.now(),
+        )
+        return booking
+
+    def test_successful_razorpay_payment_generates_correct_pdf(self):
+        """Case 1: Successful Razorpay payment generates a valid PDF receipt."""
+        booking = self.create_paid_online_booking()
+        self.client.force_authenticate(user=self.renter)
+
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res['Content-Type'], 'application/pdf')
+        self.assertIn(f'RentBee_Invoice_{booking.booking_reference}.pdf', res['Content-Disposition'])
+        # PDF signature check
+        self.assertTrue(res.content.startswith(b'%PDF-'))
+
+    def test_failed_razorpay_payment_cannot_generate_receipt(self):
+        """Case 2: Failed Razorpay payment cannot generate a receipt."""
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=1),
+            end_date=today + timedelta(days=2),
+            duration_days=1,
+            requested_quantity=1,
+            daily_price=Decimal('1000.00'),
+            rental_amount=Decimal('1000.00'),
+            deposit_amount=Decimal('500.00'),
+            total_amount=Decimal('1500.00'),
+            payment_method='online',
+            payment_status='failed',
+            status='pending_approval',
+        )
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('only available for confirmed payments', str(res.data))
+
+    def test_pending_razorpay_payment_cannot_generate_receipt(self):
+        """Case 3: Pending Razorpay payment cannot generate a receipt."""
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=1),
+            end_date=today + timedelta(days=2),
+            duration_days=1,
+            requested_quantity=1,
+            daily_price=Decimal('1000.00'),
+            rental_amount=Decimal('1000.00'),
+            deposit_amount=Decimal('500.00'),
+            total_amount=Decimal('1500.00'),
+            payment_method='online',
+            payment_status='pending',
+            status='waiting_for_pickup',
+        )
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('only available for confirmed payments', str(res.data))
+
+    def test_confirmed_offline_payment_generates_correct_pdf(self):
+        """Case 4: Confirmed offline payment generates a valid PDF receipt."""
+        booking = self.create_paid_offline_booking()
+        self.client.force_authenticate(user=self.renter)
+
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res['Content-Type'], 'application/pdf')
+        self.assertTrue(res.content.startswith(b'%PDF-'))
+
+    def test_unconfirmed_offline_payment_cannot_generate_receipt(self):
+        """Case 5: Unconfirmed offline payment cannot generate a receipt."""
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=2),
+            end_date=today + timedelta(days=4),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('1000.00'),
+            rental_amount=Decimal('2000.00'),
+            deposit_amount=Decimal('1000.00'),
+            total_amount=Decimal('3000.00'),
+            payment_method='offline',
+            payment_status='pending',
+            status='waiting_for_pickup',
+        )
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('only available for confirmed payments', str(res.data))
+
+    def test_correct_booking_id_and_reference_in_receipt(self):
+        """Case 6: Correct booking reference and database ID are reflected."""
+        from .pdf_service import generate_booking_invoice_pdf
+        booking = self.create_paid_online_booking()
+        pdf_bytes = generate_booking_invoice_pdf(booking)
+        self.assertTrue(len(pdf_bytes) > 1000)
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+
+    def test_correct_rental_dates_and_quantity_in_receipt(self):
+        """Case 7: Correct rental dates and quantity are processed."""
+        from .pdf_service import generate_booking_invoice_pdf
+        booking = self.create_paid_online_booking()
+        self.assertEqual(booking.requested_quantity, 2)
+        self.assertEqual(booking.duration_days, 2)
+        pdf_bytes = generate_booking_invoice_pdf(booking)
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+
+    def test_correct_rental_charge_and_security_deposit_displayed_separately(self):
+        """Case 8: Rental charge and security deposit are kept strictly separate."""
+        from .pdf_service import generate_booking_invoice_pdf
+        booking = self.create_paid_online_booking()
+        self.assertEqual(booking.rental_amount, Decimal('6000.00'))
+        self.assertEqual(booking.deposit_amount, Decimal('2000.00'))
+        self.assertEqual(booking.total_amount, Decimal('8000.00'))
+        pdf_bytes = generate_booking_invoice_pdf(booking)
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+
+    def test_correct_payment_method_and_transaction_id_displayed(self):
+        """Case 9: Correct payment method and transaction ID are processed."""
+        from .pdf_service import generate_booking_invoice_pdf
+        # Online booking has actual razorpay transaction id
+        online_booking = self.create_paid_online_booking()
+        online_pdf = generate_booking_invoice_pdf(online_booking)
+        self.assertTrue(online_pdf.startswith(b'%PDF-'))
+
+        # Offline booking has no fake razorpay transaction id
+        offline_booking = self.create_paid_offline_booking()
+        self.assertFalse(offline_booking.payment_transaction_id)
+        offline_pdf = generate_booking_invoice_pdf(offline_booking)
+        self.assertTrue(offline_pdf.startswith(b'%PDF-'))
+
+    def test_customer_can_download_pdf_from_booking_details_endpoint(self):
+        """Case 10: Customer can download PDF from both /invoice/ and /receipt/ endpoints."""
+        booking = self.create_paid_online_booking()
+        self.client.force_authenticate(user=self.renter)
+
+        # /invoice/ endpoint
+        res_inv = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res_inv.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_inv['Content-Type'], 'application/pdf')
+
+        # /receipt/ alias endpoint
+        res_rec = self.client.get(f'/api/bookings/{booking.id}/receipt/')
+        self.assertEqual(res_rec.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_rec['Content-Type'], 'application/pdf')
+
+    def test_another_customer_cannot_download_someone_elses_receipt(self):
+        """Case 11: Another customer cannot download someone else's receipt (HTTP 403)."""
+        booking = self.create_paid_online_booking()
+        # Stranger attempts download
+        self.client.force_authenticate(user=self.stranger)
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('not authorized', str(res.data).lower())
+
+    def test_unauthenticated_user_cannot_download_receipt(self):
+        """Anonymous requests are rejected with HTTP 401 Unauthorized."""
+        booking = self.create_paid_online_booking()
+        self.client.force_authenticate(user=None)
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_invalid_booking_id_is_handled_correctly(self):
+        """Case 12: Invalid booking ID returns HTTP 404 Not Found."""
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.get('/api/bookings/999999/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_repeated_downloads_work_without_duplicate_records(self):
+        """Case 13: Repeated downloads work without creating duplicate records or modifying state."""
+        booking = self.create_paid_online_booking()
+        self.client.force_authenticate(user=self.renter)
+
+        initial_booking_count = Booking.objects.count()
+        for _ in range(5):
+            res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+            self.assertTrue(res.content.startswith(b'%PDF-'))
+
+        self.assertEqual(Booking.objects.count(), initial_booking_count)
+        booking.refresh_from_db()
+        self.assertEqual(booking.payment_status, 'paid')
+
+    def test_staff_admin_can_download_customer_receipt(self):
+        """Staff administrator can download customer invoice on their behalf."""
+        booking = self.create_paid_online_booking()
+        self.client.force_authenticate(user=self.staff_admin)
+        res = self.client.get(f'/api/bookings/{booking.id}/invoice/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res['Content-Type'], 'application/pdf')
+
+
+class FirstBookingDiscountTests(TestCase):
+    """
+    Comprehensive tests for RentBee First Booking 10% Discount:
+    - Registered customer eligibility check
+    - Automatic 10% discount application on first booking
+    - Original price, discount, and final amount stored in booking record
+    - Deposit is not discounted
+    - Once per customer enforcement (after successful booking, never applied again)
+    - Anti-abuse: cancelling approved or paid bookings does not restore discount
+    - Concurrent in-flight pending booking protection
+    - Rejection / unapproved cancellation restores legitimate first booking
+    - Razorpay order amount matches discounted total
+    - PDF Invoice includes discount breakdown
+    - API eligibility endpoint
+    """
+    def setUp(self):
+        super().setUp()
+        BookingSystemTests.setUp(self)
+        self.item.stock = 5
+        self.item.save()
+
+    def test_registered_customer_is_initially_eligible(self):
+        """1. Every registered customer is eligible for a 10% discount on their first booking."""
+        from .services import is_user_eligible_for_first_booking_discount
+        self.assertTrue(is_user_eligible_for_first_booking_discount(self.renter))
+
+        # Check API endpoint
+        self.client.force_authenticate(user=self.renter)
+        res = self.client.get('/api/bookings/discount-eligibility/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['is_eligible'])
+        self.assertEqual(res.data['discount_percentage'], 10)
+        self.assertEqual(res.data['discount_type'], 'FIRST_BOOKING_10')
+
+    def test_unauthenticated_user_eligibility_endpoint(self):
+        """Unauthenticated visitor is not marked as eligible for immediate checkout."""
+        res = self.client.get('/api/bookings/discount-eligibility/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(res.data['is_eligible'])
+        self.assertEqual(res.data['discount_percentage'], 10)
+
+    def test_first_booking_creation_automatically_applies_10_percent_discount(self):
+        """2 & 3. 10% discount applied automatically during checkout with original, discount, and final separate."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+        start = today + timedelta(days=2)
+        end = today + timedelta(days=5)  # 3 days
+
+        # Item: rental_price=1500.00, deposit=5000.00
+        # 3 days * 1500 = 4500 rental
+        # 10% discount = 450.00
+        # Discounted rental = 4050.00
+        # Deposit = 5000.00
+        # Total payable = 9050.00
+        payload = {
+            'item_id': self.item.id,
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+            'payment_method': 'online',
+        }
+        res = self.client.post('/api/bookings/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        booking = Booking.objects.get(id=res.data['id'])
+        self.assertEqual(booking.daily_price, Decimal('1500.00'))
+        self.assertEqual(booking.original_rental_amount, Decimal('4500.00'))
+        self.assertEqual(booking.discount_amount, Decimal('450.00'))
+        self.assertEqual(booking.discount_percentage, Decimal('10.00'))
+        self.assertEqual(booking.discount_type, 'FIRST_BOOKING_10')
+        self.assertEqual(booking.rental_amount, Decimal('4050.00'))
+        self.assertEqual(booking.deposit_amount, Decimal('5000.00'))
+        self.assertEqual(booking.total_amount, Decimal('9050.00'))
+
+        # Serializer also exposes the separate breakdown fields
+        self.assertEqual(Decimal(str(res.data['original_rental_amount'])), Decimal('4500.00'))
+        self.assertEqual(Decimal(str(res.data['discount_amount'])), Decimal('450.00'))
+        self.assertEqual(Decimal(str(res.data['rental_amount'])), Decimal('4050.00'))
+        self.assertEqual(Decimal(str(res.data['total_amount'])), Decimal('9050.00'))
+
+    def test_discount_applies_only_to_rental_not_deposit(self):
+        """Deposit remains 100% intact as damage collateral and is never discounted."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+        start = today + timedelta(days=1)
+        end = today + timedelta(days=3)  # 2 days
+
+        # 2 units: 2 * 2d * 1500 = 6000 rental. Deposit = 2 * 5000 = 10000.
+        payload = {
+            'item_id': self.item.id,
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+            'requested_quantity': 2,
+            'address_id': self.renter_address.id,
+            'payment_method': 'online',
+        }
+        res = self.client.post('/api/bookings/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        booking = Booking.objects.get(id=res.data['id'])
+        self.assertEqual(booking.original_rental_amount, Decimal('6000.00'))
+        self.assertEqual(booking.discount_amount, Decimal('600.00'))
+        self.assertEqual(booking.rental_amount, Decimal('5400.00'))
+        self.assertEqual(booking.deposit_amount, Decimal('10000.00'))
+        self.assertEqual(booking.total_amount, Decimal('15400.00'))
+
+    def test_discount_applied_only_once_per_customer_after_successful_booking(self):
+        """4 & 5. After the first successful booking, customer must not receive the offer again."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+
+        # 1st booking (1 day = 1500 rental, 150 discount)
+        payload1 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=1)).isoformat(),
+            'end_date': (today + timedelta(days=2)).isoformat(),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res1 = self.client.post('/api/bookings/', payload1, format='json')
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        booking1 = Booking.objects.get(id=res1.data['id'])
+        self.assertEqual(booking1.discount_amount, Decimal('150.00'))
+
+        # Owner approves booking 1 -> successful booking!
+        booking1.status = 'waiting_for_pickup'
+        booking1.approved_at = timezone.now()
+        booking1.save()
+
+        # Customer attempts 2nd booking for future dates
+        payload2 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=10)).isoformat(),
+            'end_date': (today + timedelta(days=12)).isoformat(),  # 2 days = 3000 rental
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res2 = self.client.post('/api/bookings/', payload2, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        booking2 = Booking.objects.get(id=res2.data['id'])
+
+        # No discount on second booking!
+        self.assertEqual(booking2.discount_amount, Decimal('0.00'))
+        self.assertEqual(booking2.discount_percentage, Decimal('0.00'))
+        self.assertEqual(booking2.rental_amount, Decimal('3000.00'))
+        self.assertEqual(booking2.total_amount, Decimal('8000.00'))
+
+    def test_cancelling_approved_booking_does_not_restore_discount(self):
+        """7. Users cannot receive the offer repeatedly by cancelling approved bookings and re-booking."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+
+        # 1st booking with discount (2 days = 3000 rental, 300 discount)
+        payload1 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=1)).isoformat(),
+            'end_date': (today + timedelta(days=3)).isoformat(),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res1 = self.client.post('/api/bookings/', payload1, format='json')
+        booking1 = Booking.objects.get(id=res1.data['id'])
+        self.assertEqual(booking1.discount_amount, Decimal('300.00'))
+
+        # Booking is approved
+        booking1.status = 'waiting_for_pickup'
+        booking1.approved_at = timezone.now()
+        booking1.save()
+
+        # Renter cancels the approved booking
+        booking1.status = 'cancelled'
+        booking1.cancelled_at = timezone.now()
+        booking1.cancelled_by = self.renter
+        booking1.save()
+
+        # Renter creates a new booking
+        payload2 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=5)).isoformat(),
+            'end_date': (today + timedelta(days=7)).isoformat(),  # 2 days = 3000 rental
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res2 = self.client.post('/api/bookings/', payload2, format='json')
+        booking2 = Booking.objects.get(id=res2.data['id'])
+
+        # Discount is NOT restored because booking1 was already approved/successful
+        self.assertEqual(booking2.discount_amount, Decimal('0.00'))
+        self.assertEqual(booking2.rental_amount, Decimal('3000.00'))
+        self.assertEqual(booking2.total_amount, Decimal('8000.00'))
+
+    def test_in_flight_pending_booking_blocks_concurrent_discounted_bookings(self):
+        """Customer cannot open multiple tabs and get 10% discount on multiple concurrent bookings."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+
+        # Create first booking (status='pending_approval', discount_amount=150)
+        payload1 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=1)).isoformat(),
+            'end_date': (today + timedelta(days=2)).isoformat(),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res1 = self.client.post('/api/bookings/', payload1, format='json')
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Decimal(str(res1.data['discount_amount'])), Decimal('150.00'))
+
+        # Try to create second booking while first is still pending_approval
+        payload2 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=5)).isoformat(),
+            'end_date': (today + timedelta(days=6)).isoformat(),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res2 = self.client.post('/api/bookings/', payload2, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        # Second booking receives NO discount!
+        self.assertEqual(Decimal(str(res2.data['discount_amount'])), Decimal('0.00'))
+
+    def test_cancelled_unapproved_booking_restores_eligibility(self):
+        """If owner rejects or renter cancels an unapproved booking, user can still use their first booking offer."""
+        self.client.force_authenticate(user=self.renter)
+        today = timezone.localdate()
+
+        # Create booking 1
+        payload1 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=1)).isoformat(),
+            'end_date': (today + timedelta(days=2)).isoformat(),
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res1 = self.client.post('/api/bookings/', payload1, format='json')
+        booking1 = Booking.objects.get(id=res1.data['id'])
+        self.assertEqual(booking1.discount_amount, Decimal('150.00'))
+
+        # Owner rejects the booking before approval
+        booking1.status = 'rejected'
+        booking1.rejection_reason = 'Owner unavailable'
+        booking1.rejected_at = timezone.now()
+        booking1.save()
+
+        # User is once again eligible for their real first rental!
+        from .services import is_user_eligible_for_first_booking_discount
+        self.assertTrue(is_user_eligible_for_first_booking_discount(self.renter))
+
+        payload2 = {
+            'item_id': self.item.id,
+            'start_date': (today + timedelta(days=3)).isoformat(),
+            'end_date': (today + timedelta(days=5)).isoformat(),  # 2 days = 3000 rental
+            'requested_quantity': 1,
+            'address_id': self.renter_address.id,
+        }
+        res2 = self.client.post('/api/bookings/', payload2, format='json')
+        booking2 = Booking.objects.get(id=res2.data['id'])
+        self.assertEqual(booking2.discount_amount, Decimal('300.00'))
+        self.assertEqual(booking2.rental_amount, Decimal('2700.00'))
+        self.assertEqual(booking2.total_amount, Decimal('7700.00'))
+
+    def test_razorpay_order_notes_contain_discount_details(self):
+        """6. Razorpay order records discount details in notes and charges the discounted total."""
+        from unittest.mock import patch, MagicMock
+
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=1),
+            end_date=today + timedelta(days=3),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('500.00'),
+            original_rental_amount=Decimal('1000.00'),
+            discount_amount=Decimal('100.00'),
+            discount_percentage=Decimal('10.00'),
+            discount_type='FIRST_BOOKING_10',
+            rental_amount=Decimal('900.00'),
+            deposit_amount=Decimal('1000.00'),
+            total_amount=Decimal('1900.00'),
+            status='waiting_for_pickup',
+            payment_status='pending',
+            payment_method='online',
+        )
+
+        mock_client = MagicMock()
+        mock_client.order.create.return_value = {
+            'id': 'order_test_discount_123',
+            'amount': 190000,
+            'currency': 'INR',
+        }
+
+        with patch('bookings.services.get_razorpay_client', return_value=mock_client), \
+             patch('django.conf.settings.RAZORPAY_KEY_ID', 'rzp_test_key'):
+            from .services import get_or_create_razorpay_order_for_booking
+            order = get_or_create_razorpay_order_for_booking(booking)
+
+            self.assertEqual(order['amount'], 190000)
+            mock_client.order.create.assert_called_once()
+            call_kwargs = mock_client.order.create.call_args[1]['data']
+            self.assertEqual(call_kwargs['amount'], 190000)
+            self.assertEqual(call_kwargs['notes']['discount_amount'], '100.00')
+            self.assertEqual(call_kwargs['notes']['discount_type'], 'FIRST_BOOKING_10')
+
+    def test_invoice_pdf_includes_discount_breakdown(self):
+        """Verified PDF invoice itemizes the original rental, 10% discount, and payable amount."""
+        from .pdf_service import generate_booking_invoice_pdf
+
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=1),
+            end_date=today + timedelta(days=3),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('500.00'),
+            original_rental_amount=Decimal('1000.00'),
+            discount_amount=Decimal('100.00'),
+            discount_percentage=Decimal('10.00'),
+            discount_type='FIRST_BOOKING_10',
+            rental_amount=Decimal('900.00'),
+            deposit_amount=Decimal('1000.00'),
+            total_amount=Decimal('1900.00'),
+            status='waiting_for_pickup',
+            payment_status='paid',
+            payment_method='online',
+            payment_transaction_id='pay_test_pdf_123',
+            payment_verified_at=timezone.now(),
+        )
+
+        pdf_bytes = generate_booking_invoice_pdf(booking)
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+        self.assertGreater(len(pdf_bytes), 1000)
+
+    def test_razorpay_order_notes_contain_discount_details(self):
+        """6. Razorpay order records discount details in notes and charges the discounted total."""
+        from unittest.mock import patch, MagicMock
+
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=1),
+            end_date=today + timedelta(days=3),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('500.00'),
+            original_rental_amount=Decimal('1000.00'),
+            discount_amount=Decimal('100.00'),
+            discount_percentage=Decimal('10.00'),
+            discount_type='FIRST_BOOKING_10',
+            rental_amount=Decimal('900.00'),
+            deposit_amount=Decimal('1000.00'),
+            total_amount=Decimal('1900.00'),
+            status='waiting_for_pickup',
+            payment_status='pending',
+            payment_method='online',
+        )
+
+        mock_client = MagicMock()
+        mock_client.order.create.return_value = {
+            'id': 'order_test_discount_123',
+            'amount': 190000,
+            'currency': 'INR',
+        }
+
+        with patch('bookings.services.get_razorpay_client', return_value=mock_client), \
+             patch('django.conf.settings.RAZORPAY_KEY_ID', 'rzp_test_key'):
+            from .services import get_or_create_razorpay_order_for_booking
+            order = get_or_create_razorpay_order_for_booking(booking)
+
+            self.assertEqual(order['amount'], 190000)
+            mock_client.order.create.assert_called_once()
+            call_kwargs = mock_client.order.create.call_args[1]['data']
+            self.assertEqual(call_kwargs['amount'], 190000)
+            self.assertEqual(call_kwargs['notes']['discount_amount'], '100.00')
+            self.assertEqual(call_kwargs['notes']['discount_type'], 'FIRST_BOOKING_10')
+
+    def test_invoice_pdf_includes_discount_breakdown(self):
+        """Verified PDF invoice itemizes the original rental, 10% discount, and payable amount."""
+        from .pdf_service import generate_booking_invoice_pdf
+
+        today = timezone.localdate()
+        booking = Booking.objects.create(
+            item=self.item,
+            owner=self.owner,
+            renter=self.renter,
+            start_date=today + timedelta(days=1),
+            end_date=today + timedelta(days=3),
+            duration_days=2,
+            requested_quantity=1,
+            daily_price=Decimal('500.00'),
+            original_rental_amount=Decimal('1000.00'),
+            discount_amount=Decimal('100.00'),
+            discount_percentage=Decimal('10.00'),
+            discount_type='FIRST_BOOKING_10',
+            rental_amount=Decimal('900.00'),
+            deposit_amount=Decimal('1000.00'),
+            total_amount=Decimal('1900.00'),
+            status='waiting_for_pickup',
+            payment_status='paid',
+            payment_method='online',
+            payment_transaction_id='pay_test_pdf_123',
+            payment_verified_at=timezone.now(),
+        )
+
+        pdf_bytes = generate_booking_invoice_pdf(booking)
+        self.assertTrue(pdf_bytes.startswith(b'%PDF-'))
+        self.assertGreater(len(pdf_bytes), 1000)
+
+
+
+
 

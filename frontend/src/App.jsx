@@ -26,6 +26,8 @@ import ListItem from './Pages/ListItem'
 import UserManagement from './Pages/UserManagement'
 import AdminCategoryManagement from './Pages/AdminCategoryManagement'
 import AdminItemManagement from './Pages/AdminItemManagement'
+import AdminBookingManagement from './Pages/AdminBookingManagement'
+import AdminInventoryManagement from './Pages/AdminInventoryManagement'
 import Wishlist from './Pages/Wishlist'
 
 import ProtectedAdminRoute from './Components/ProtectedAdminRoute'
@@ -73,6 +75,8 @@ function App() {
             <Route path="/admin/users" element={<UserManagement />} />
             <Route path="/admin/categories" element={<AdminCategoryManagement />} />
             <Route path="/admin/items" element={<AdminItemManagement />} />
+            <Route path="/admin/bookings" element={<AdminBookingManagement />} />
+            <Route path="/admin/inventory" element={<AdminInventoryManagement />} />
           </Route>
 
           {/* Fallback */}

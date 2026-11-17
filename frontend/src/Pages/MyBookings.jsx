@@ -153,11 +153,16 @@ export default function MyBookings() {
   const handleConfirmCancel = async (bookingId, reason) => {
     setCancelling(true)
     try {
-      await cancelBooking(bookingId, reason)
+      const res = await cancelBooking(bookingId, reason)
       setCancelModalOpen(false)
       setSelectedBookingForCancel(null)
-      setToastMessage('Booking cancelled successfully.')
-      setTimeout(() => setToastMessage(''), 4000)
+      const msg = res?.refund_status === 'pending'
+        ? 'Booking cancelled. 100% refund initiated to your original payment method.'
+        : res?.payment_method === 'offline' && res?.refund_status === 'pending'
+        ? 'Booking cancelled. Please collect your cash refund from the host.'
+        : 'Booking cancelled successfully.'
+      setToastMessage(msg)
+      setTimeout(() => setToastMessage(''), 5000)
       refetchBookings()
     } catch (err) {
       alert(err.message || 'Failed to cancel booking.')

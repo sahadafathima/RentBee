@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom'
 import Navbar from '../Components/Navbar'
 import Footer from '../Components/Footer'
 import CancelBookingModal from '../Components/CancelBookingModal'
+import PickupOtpModal from '../Components/PickupOtpModal'
+import ReturnCountdownTimer from '../Components/ReturnCountdownTimer'
 import useCurrentUserId from '../hooks/useCurrentUserId'
 import {
   getHostBookings,
@@ -13,6 +15,7 @@ import {
   confirmPickup,
   confirmReturn,
   cancelBooking,
+  confirmOfflineBookingPayment,
 } from '../services/api'
 import {
   Inbox,
@@ -31,6 +34,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Search,
+  Banknote,
 } from 'lucide-react'
 import { formatKolkataDateTime, calculateReturnCountdown } from '../utils/dateUtils'
 
@@ -119,6 +123,7 @@ export default function HostHub() {
   const [rejectReason, setRejectReason] = useState('')
   const [cancelModalBooking, setCancelModalBooking] = useState(null)
   const [cancellingBooking, setCancellingBooking] = useState(false)
+  const [otpModalBooking, setOtpModalBooking] = useState(null)
 
   // Sync tab with URL search params without cascading effect renders
   const [prevParams, setPrevParams] = useState({ requestedTab, highlightBookingId })
@@ -269,13 +274,18 @@ export default function HostHub() {
   // Host Action: Reject
   const handleRejectConfirm = async () => {
     if (!rejectingBooking) return
+    const trimmedReason = rejectReason.trim()
+    if (!trimmedReason) {
+      alert('Please explain why you are rejecting this booking. A rejection reason is required.')
+      return
+    }
     const rejectedId = rejectingBooking.id
     setActionLoading(true)
     try {
-      await ownerRejectBooking(rejectedId, rejectReason)
+      await ownerRejectBooking(rejectedId, trimmedReason)
       setRejectingBooking(null)
       setRejectReason('')
-      showToast('Booking request declined. Moved to Rejected.')
+      showToast('Booking request rejected. Moved to Rejected.')
       window.dispatchEvent(new Event('rentbee:bookings-changed'))
       const stringId = String(rejectedId)
       setActiveTab('rejected')
@@ -289,7 +299,7 @@ export default function HostHub() {
       }, { replace: true })
       reloadData()
     } catch (err) {
-      alert(err.message || 'Failed to decline booking.')
+      alert(err.message || 'Failed to reject booking.')
     } finally {
       setActionLoading(false)
     }
@@ -305,6 +315,24 @@ export default function HostHub() {
       reloadData()
     } catch (err) {
       alert(err.message || 'Failed to confirm pickup.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  // Host Action: Confirm Offline Cash Payment
+  const handleConfirmOfflinePayment = async (id, totalAmount) => {
+    if (!window.confirm(`Confirm receipt of ₹${totalAmount} cash payment from the renter?`)) {
+      return
+    }
+    setActionLoading(true)
+    try {
+      await confirmOfflineBookingPayment(id)
+      showToast('Cash payment confirmed successfully! Handover is now unlocked.')
+      window.dispatchEvent(new Event('rentbee:bookings-changed'))
+      reloadData()
+    } catch (err) {
+      alert(err.message || 'Failed to confirm offline payment.')
     } finally {
       setActionLoading(false)
     }
@@ -765,22 +793,34 @@ export default function HostHub() {
                         )}
                       </div>
 
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${b.status === 'pending_approval'
-                            ? 'bg-amber-100 text-amber-800'
-                            : b.status === 'waiting_for_pickup'
-                              ? 'bg-orange-100 text-[#9D4C29]'
-                              : b.status === 'rental_in_progress'
-                                ? 'bg-blue-100 text-blue-800'
-                                : b.status === 'rejected'
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : b.status === 'cancelled'
-                                    ? 'bg-gray-100 text-gray-700'
-                                    : 'bg-emerald-100 text-emerald-800'
-                          }`}
-                      >
-                        {b.status_display}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-orange-50 text-[#D97745] border border-orange-200 px-2.5 py-0.5 text-xs font-semibold inline-flex items-center gap-1">
+                          {b.payment_method === 'offline' ? (
+                            <>
+                              <Banknote size={12} />
+                              <span>{b.payment_method_display || 'Pay at Pickup'}</span>
+                            </>
+                          ) : (
+                            <span>{b.payment_method_display || 'Online Payment'}</span>
+                          )}
+                        </span>
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${b.status === 'pending_approval'
+                              ? 'bg-amber-100 text-amber-800'
+                              : b.status === 'waiting_for_pickup'
+                                ? 'bg-orange-100 text-[#9D4C29]'
+                                : b.status === 'rental_in_progress'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : b.status === 'rejected'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : b.status === 'cancelled'
+                                      ? 'bg-gray-100 text-gray-700'
+                                      : 'bg-emerald-100 text-emerald-800'
+                            }`}
+                        >
+                          {b.status_display}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -926,21 +966,8 @@ export default function HostHub() {
                             </div>
                           )}
 
-                          {/* Rental in Progress: Return Deadline & Countdown */}
-                          {b.status === 'rental_in_progress' && b.return_deadline && (
-                            <div className="mt-2 rounded-xl bg-[#FFF9F5] border border-orange-200/80 p-2.5 text-xs text-[#352720] space-y-1">
-                              <div className="flex items-center gap-1.5 font-bold text-[#9D4C29]">
-                                <Clock size={13} />
-                                <span>Return Deadline: {b.return_deadline_display || formatKolkataDateTime(b.return_deadline)}</span>
-                              </div>
-                              <div className="text-[11px] text-gray-500 flex flex-wrap items-center justify-between gap-1">
-                                <span>Picked up: {b.picked_up_at_display || formatKolkataDateTime(b.picked_up_at)}</span>
-                                <span className={`font-semibold ${calculateReturnCountdown(b.return_deadline).isOverdue ? 'text-rose-600' : 'text-emerald-700'}`}>
-                                  {calculateReturnCountdown(b.return_deadline).text}
-                                </span>
-                              </div>
-                            </div>
-                          )}
+                          {/* Rental in Progress: Shared Return Deadline & Countdown */}
+                          <ReturnCountdownTimer booking={b} compact={true} />
 
                           {/* Completed: Return confirmation timestamp */}
                           {b.status === 'completed' && (b.returned_at || b.returned_at_display) && (
@@ -992,34 +1019,55 @@ export default function HostHub() {
                             )}
 
                             {b.status === 'waiting_for_pickup' && (
-                              <div className="flex flex-col items-end gap-1">
+                              <div className="flex flex-col items-end gap-1.5">
                                 {b.payment_status === 'paid' ? (
                                   <button
                                     type="button"
-                                    onClick={() => handlePickup(b.id)}
+                                    onClick={() => setOtpModalBooking(b)}
                                     disabled={actionLoading}
-                                    className="rounded-xl bg-[#D97745] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#B85D32] transition cursor-pointer"
+                                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#D97745] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#B85D32] transition cursor-pointer shadow-xs"
                                   >
-                                    Confirm Pickup
+                                    <ShieldCheck size={13} />
+                                    {b.has_active_pickup_otp ? 'Verify Pickup OTP' : 'Send Pickup OTP'}
                                   </button>
                                 ) : (
-                                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-xl">
-                                    <Clock size={12} />
-                                    <span>Awaiting Payment Verification</span>
-                                  </div>
+                                  <>
+                                    {b.can_confirm_offline_payment && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleConfirmOfflinePayment(b.id, b.total_amount)}
+                                        disabled={actionLoading}
+                                        className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition cursor-pointer shadow-xs"
+                                      >
+                                        <Banknote size={13} /> Confirm Cash Payment
+                                      </button>
+                                    )}
+                                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-xl">
+                                      <Clock size={12} />
+                                      <span>
+                                        {b.payment_method === 'offline' ? 'Awaiting Cash at Pickup' : 'Awaiting Payment Verification'}
+                                      </span>
+                                    </div>
+                                  </>
                                 )}
                               </div>
                             )}
 
                             {b.status === 'rental_in_progress' && (
-                              <button
-                                type="button"
-                                onClick={() => handleReturn(b.id)}
-                                disabled={actionLoading}
-                                className="rounded-xl bg-emerald-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 transition cursor-pointer"
-                              >
-                                Confirm Return
-                              </button>
+                              <div className="flex flex-col items-end gap-1.5">
+                                <div className="flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl">
+                                  <CheckCircle2 size={12} className="text-emerald-600" />
+                                  <span>Pickup Confirmed ({b.pickup_confirmed_at_display || b.picked_up_at_display})</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturn(b.id)}
+                                  disabled={actionLoading}
+                                  className="rounded-xl bg-emerald-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 transition cursor-pointer"
+                                >
+                                  Confirm Return
+                                </button>
+                              </div>
                             )}
                           </>
                         )}
@@ -1097,26 +1145,31 @@ export default function HostHub() {
 
       <Footer />
 
-      {/* Decline Reason Modal */}
+      {/* Rejection Reason Modal */}
       {rejectingBooking && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-orange-100">
-            <h3 className="text-base font-bold text-[#352720]">Decline Booking Request</h3>
+            <h3 className="text-base font-bold text-[#352720]">Reject Booking Request</h3>
             <p className="text-xs text-gray-500 mt-1">
               For {rejectingBooking.item?.name} requested by {rejectingBooking.renter?.full_name}.
             </p>
 
             <div className="mt-4">
               <label className="block text-xs font-semibold text-[#352720] mb-1">
-                Reason for declining (optional):
+                Rejection Reason <span className="text-rose-600">*</span>
               </label>
               <textarea
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="e.g. Equipment undergoing maintenance, dates not convenient..."
-                rows={2}
+                placeholder="Please explain why you are rejecting this booking."
+                rows={3}
                 className="w-full rounded-xl border border-orange-200 p-2.5 text-xs text-[#352720] focus:border-[#D97745] focus:outline-none"
               />
+              {!rejectReason.trim() && (
+                <p className="mt-1 text-[11px] text-gray-400">
+                  A valid reason is required to reject this booking.
+                </p>
+              )}
             </div>
 
             <div className="mt-6 flex justify-end gap-2.5">
@@ -1133,10 +1186,10 @@ export default function HostHub() {
               <button
                 type="button"
                 onClick={handleRejectConfirm}
-                disabled={actionLoading}
-                className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"
+                disabled={actionLoading || !rejectReason.trim()}
+                className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
-                {actionLoading ? 'Declining...' : 'Decline Request'}
+                {actionLoading ? 'Rejecting...' : 'Confirm Rejection'}
               </button>
             </div>
           </div>
@@ -1151,6 +1204,19 @@ export default function HostHub() {
         onConfirm={handleCancelConfirm}
         loading={cancellingBooking}
       />
+
+      {/* Pickup OTP Verification Modal */}
+      {otpModalBooking && (
+        <PickupOtpModal
+          booking={otpModalBooking}
+          isOpen={Boolean(otpModalBooking)}
+          onClose={() => setOtpModalBooking(null)}
+          onSuccess={() => {
+            showToast('Pickup confirmed! Rental is now in progress.')
+            reloadData()
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Users, LayoutGrid, Package, ChevronRight, LogOut, ExternalLink } from 'lucide-react'
+import { Users, LayoutGrid, Package, CalendarDays, Boxes, ChevronRight, LogOut, ExternalLink } from 'lucide-react'
 import rentBeeLogo from '../assets/rentbee_logo.png'
 import { userLogout } from '../services/authentication'
 
@@ -7,6 +7,8 @@ const NAV = [
   { path: '/admin/users', label: 'User Management', icon: Users },
   { path: '/admin/categories', label: 'Category Management', icon: LayoutGrid },
   { path: '/admin/items', label: 'Item Management', icon: Package },
+  { path: '/admin/bookings', label: 'Booking Management', icon: CalendarDays },
+  { path: '/admin/inventory', label: 'Inventory Management', icon: Boxes },
 ]
 
 export default function AdminLayout({ pageTitle = 'Overview', breadcrumbs = [], children }) {

@@ -14,9 +14,6 @@ class LoginSerializer(serializers.Serializer):
     )
 
 
-
-
-
 class ProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(source="user.full_name")
     email = serializers.EmailField(

@@ -25,11 +25,10 @@ function BrowseCategories({ selectedCategory = '', onSelectCategory }) {
           <button
             type="button"
             onClick={() => onSelectCategory && onSelectCategory('')}
-            className={`flex min-w-[108px] shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition hover:border-[#E58A62] sm:min-w-[130px] ${
-              !selectedCategory
+            className={`flex min-w-[108px] shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition hover:border-[#E58A62] sm:min-w-[130px] ${!selectedCategory
                 ? 'border-[#E58A62] bg-[#FFF4ED]'
                 : 'border-orange-100 bg-white hover:bg-orange-50'
-            }`}
+              }`}
           >
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#FFF0E7] text-base">
               ▦
@@ -49,11 +48,10 @@ function BrowseCategories({ selectedCategory = '', onSelectCategory }) {
               key={category.id}
               type="button"
               onClick={() => onSelectCategory && onSelectCategory(String(category.id))}
-              className={`flex min-w-[108px] shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition hover:border-[#E58A62] sm:min-w-[130px] ${
-                selectedCategory === String(category.id)
+              className={`flex min-w-[108px] shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition hover:border-[#E58A62] sm:min-w-[130px] ${selectedCategory === String(category.id)
                   ? 'border-[#E58A62] bg-[#FFF4ED]'
                   : 'border-orange-100 bg-white hover:bg-orange-50'
-              }`}
+                }`}
             >
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#FFF0E7] text-base">
                 {category.icon || '📦'}
@@ -62,9 +60,6 @@ function BrowseCategories({ selectedCategory = '', onSelectCategory }) {
               <span className="min-w-0">
                 <span className="block whitespace-nowrap text-[10px] font-semibold text-[#352720] sm:text-xs">
                   {category.name}
-                </span>
-                <span className="mt-0.5 block whitespace-nowrap text-[9px] text-gray-500">
-                  {category.items_count !== undefined ? `${category.items_count} items` : 'Equipment'}
                 </span>
               </span>
             </button>

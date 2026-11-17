@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom'
-import { CheckCircle2, ArrowRight, Home, Calendar, ShieldCheck, Tag } from 'lucide-react'
+import { CheckCircle2, ArrowRight, Home, Calendar, ShieldCheck, Tag, MapPin, CreditCard, Banknote } from 'lucide-react'
 import Navbar from '../Components/Navbar'
 import Footer from '../Components/Footer'
 
@@ -7,6 +7,7 @@ function BookingSuccess() {
   const location = useLocation()
   const navigate = useNavigate()
   const booking = location.state?.booking
+  const renterAddress = booking?.renter_address || booking?.renter?.address_info
 
   return (
     <div className="flex min-h-screen flex-col bg-[#FFFCF9]">
@@ -100,14 +101,91 @@ function BookingSuccess() {
                       </span>
                     </div>
                   </div>
+
+                  {/* Payment Method */}
+                  <div className="flex items-start gap-2.5">
+                    {booking.payment_method === 'offline' ? (
+                      <Banknote size={18} className="text-[#D97745] shrink-0 mt-0.5" />
+                    ) : (
+                      <CreditCard size={18} className="text-[#D97745] shrink-0 mt-0.5" />
+                    )}
+                    <div>
+                      <span className="text-[#8B776D] block">Payment Method:</span>
+                      <span className="font-semibold text-[#352720]">
+                        {booking.payment_method_display ||
+                          (booking.payment_method === 'offline'
+                            ? 'Pay at Pickup (Cash)'
+                            : 'Online Payment (Razorpay)')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Payment Status */}
+                  <div className="flex items-start gap-2.5">
+                    <ShieldCheck size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[#8B776D] block">Payment Status:</span>
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-bold ${
+                          booking.payment_status === 'paid'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {booking.payment_status_display ||
+                          (booking.payment_status === 'paid' ? 'Payment Verified' : 'Pending Payment')}
+                      </span>
+                    </div>
+                  </div>
                 </div>
+
+                {/* Delivery / Contact Address */}
+                {renterAddress && (renterAddress.full_formatted_address || renterAddress.city) && (
+                  <div className="py-4 border-b border-[#EBDDD4] text-xs sm:text-sm">
+                    <div className="flex items-start gap-2.5">
+                      <MapPin size={18} className="text-[#D97745] shrink-0 mt-0.5" />
+                      <div>
+                        <span className="text-[#8B776D] block">Delivery / Contact Address:</span>
+                        <span className="font-semibold text-[#352720]">
+                          {renterAddress.full_name && `${renterAddress.full_name} • `}
+                          {renterAddress.full_formatted_address ||
+                            [renterAddress.house_number, renterAddress.address, renterAddress.area, renterAddress.city, renterAddress.state, renterAddress.pincode].filter(Boolean).join(', ')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Price Breakdown */}
                 <div className="pt-4 space-y-2 text-xs sm:text-sm">
+                  {parseFloat(booking.discount_amount || 0) > 0 && (
+                    <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800 flex items-center justify-between mb-2">
+                      <span className="font-bold flex items-center gap-1.5">
+                        <Tag size={13} className="text-emerald-600" /> First Booking 10% Discount Applied!
+                      </span>
+                      <span className="rounded-full bg-emerald-600 text-white font-extrabold text-[10px] px-2 py-0.5">
+                        10% OFF
+                      </span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between text-[#6E584E]">
-                    <span>Rental Rate ({booking.requested_quantity || 1} × {booking.duration_days}d × ₹{Number(booking.daily_price || 0).toLocaleString()}):</span>
-                    <span className="font-semibold text-[#352720]">₹{Number(booking.rental_amount || 0).toLocaleString()}</span>
+                    <span>
+                      {parseFloat(booking.discount_amount || 0) > 0 ? 'Original Rental Rate' : 'Rental Rate'} ({booking.requested_quantity || 1} × {booking.duration_days}d × ₹{Number(booking.daily_price || 0).toLocaleString()}):
+                    </span>
+                    <span className={`font-semibold ${parseFloat(booking.discount_amount || 0) > 0 ? 'line-through text-gray-400' : 'text-[#352720]'}`}>
+                      ₹{Number(booking.original_rental_amount || (parseFloat(booking.rental_amount || 0) + parseFloat(booking.discount_amount || 0))).toLocaleString()}
+                    </span>
                   </div>
+
+                  {parseFloat(booking.discount_amount || 0) > 0 && (
+                    <div className="flex justify-between text-emerald-700 font-medium">
+                      <span className="inline-flex items-center gap-1">
+                        <Tag size={13} className="text-emerald-600" /> First Booking Discount (10%):
+                      </span>
+                      <span className="font-bold text-emerald-700">-₹{Number(booking.discount_amount).toLocaleString()}</span>
+                    </div>
+                  )}
 
                   <div className="flex justify-between text-[#6E584E]">
                     <span className="inline-flex items-center gap-1">

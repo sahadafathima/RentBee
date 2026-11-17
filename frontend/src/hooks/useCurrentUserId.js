@@ -9,7 +9,7 @@ function subscribe(callback) {
 
 export default function useCurrentUserId() {
   return useSyncExternalStore(
-    subscribe,
+    subscribe, 
     () => {
       const accessPayload = parseJwtPayload(getAccessToken())
       if (accessPayload?.user_id) return accessPayload.user_id
@@ -18,4 +18,5 @@ export default function useCurrentUserId() {
     },
     () => null
   )
-}
+}  
+

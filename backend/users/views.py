@@ -28,6 +28,12 @@ from .models import (
     EmailChangeOTP,
 )
 from .serializers import LoginSerializer,ProfileSerializer
+from .email_service import (
+    send_rentbee_otp_email,
+    OTP_PURPOSE_SIGNUP,
+    OTP_PURPOSE_PASSWORD_RESET,
+    OTP_PURPOSE_EMAIL_CHANGE,
+)
 
 
 User = get_user_model()
@@ -38,7 +44,17 @@ def get_text(data, key):
     return value.strip() if isinstance(value, str) else ""
 
 
-def send_otp_email(subject, message, email):
+def send_otp_email(subject, message, email, otp=None, purpose=OTP_PURPOSE_SIGNUP, expiry_minutes=10):
+    """
+    Unified OTP email dispatcher. Delegates to the centralized email service.
+    """
+    if otp:
+        return send_rentbee_otp_email(
+            to_email=email,
+            otp=otp,
+            purpose=purpose,
+            expiry_minutes=expiry_minutes,
+        )
     send_mail(
         subject=subject,
         message=message,
@@ -106,13 +122,11 @@ def send_signup_otp(request):
     )
 
     try:
-        send_otp_email(
-            "Your RentBee verification code",
-            (
-                f"Your RentBee email verification code is {otp}.\n"
-                "It expires in 10 minutes. Do not share this code."
-            ),
-            email,
+        send_rentbee_otp_email(
+            to_email=email,
+            otp=otp,
+            purpose=OTP_PURPOSE_SIGNUP,
+            expiry_minutes=10,
         )
     except Exception:
         PendingSignup.objects.filter(email__iexact=email).delete()
@@ -373,13 +387,11 @@ def send_password_reset_otp(request):
     )
 
     try:
-        send_otp_email(
-            "RentBee password reset code",
-            (
-                f"Your RentBee password reset code is {otp}.\n"
-                "It expires in 5 minutes. Do not share this code."
-            ),
-            user.email,
+        send_rentbee_otp_email(
+            to_email=user.email,
+            otp=otp,
+            purpose=OTP_PURPOSE_PASSWORD_RESET,
+            expiry_minutes=5,
         )
     except Exception:
         PasswordResetOTP.objects.filter(
@@ -585,7 +597,7 @@ def logout(request):
 @permission_classes([IsAuthenticated, IsActiveUser])
 def user_profile(request):
 
-    profile, created = Profile.objects.get_or_create(
+    profile, _ = Profile.objects.get_or_create(
         user=request.user
     )
 
@@ -648,7 +660,7 @@ def send_email_change_otp(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    otp = str(secrets.randbelow(900000) + 100000)
+    otp = f"{secrets.randbelow(1_000_000):06d}"
 
     EmailChangeOTP.objects.update_or_create(
         user=request.user,
@@ -661,12 +673,11 @@ def send_email_change_otp(request):
     )
 
     try:
-        send_mail(
-            subject="RentBee Email Change Verification",
-            message=f"Your email verification OTP is {otp}. It expires in 5 minutes.",
-            from_email=None,
-            recipient_list=[new_email],
-            fail_silently=False,
+        send_rentbee_otp_email(
+            to_email=new_email,
+            otp=otp,
+            purpose=OTP_PURPOSE_EMAIL_CHANGE,
+            expiry_minutes=5,
         )
 
     except Exception:
@@ -674,7 +685,7 @@ def send_email_change_otp(request):
 
         return Response(
             {"error": "Unable to send OTP. Please try again."},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
         )
 
     return Response(

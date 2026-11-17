@@ -90,6 +90,7 @@ class ItemSerializer(serializers.ModelSerializer):
     is_currently_booked = serializers.SerializerMethodField()
     current_booking = serializers.SerializerMethodField()
     is_booked_by_current_user = serializers.SerializerMethodField()
+    is_owner = serializers.SerializerMethodField()
     user_booking = serializers.SerializerMethodField()
     rental_kit = serializers.SerializerMethodField()
     deposit = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
@@ -101,7 +102,7 @@ class ItemSerializer(serializers.ModelSerializer):
         model = Item
         fields = [
             'id', 'name', 'slug', 'description', 'category_id', 'category_name',
-            'category_icon', 'owner', 'owner_name', 'booking_activity', 'owner_details', 'rental_price',
+            'category_icon', 'owner', 'owner_name', 'is_owner', 'booking_activity', 'owner_details', 'rental_price',
             'stock', 'total_stock', 'available_stock', 'availability_reason', 'deposit', 'rental_kit', 'is_available', 'is_currently_booked',
             'current_booking', 'is_booked_by_current_user', 'user_booking',
             'is_published', 'is_deleted',
@@ -219,6 +220,12 @@ class ItemSerializer(serializers.ModelSerializer):
 
     def get_is_available(self, obj):
         return self._availability(obj)['is_available']
+
+    def get_is_owner(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return request.user.pk == obj.owner_id
 
     def get_booking_activity(self, obj):
         request = self.context.get('request')

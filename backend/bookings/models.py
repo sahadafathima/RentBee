@@ -1,9 +1,21 @@
+import json
 import uuid
+import zoneinfo
+from decimal import Decimal
 from datetime import timedelta
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
+
+KOLKATA_TZ = zoneinfo.ZoneInfo('Asia/Kolkata')
+
+
+def _format_kolkata_dt(dt):
+    """Formats a datetime in Asia/Kolkata timezone with IST suffix."""
+    if not dt:
+        return None
+    return dt.astimezone(KOLKATA_TZ).strftime('%d %b %Y, %I:%M %p IST')
 
 
 class Booking(models.Model):
@@ -20,7 +32,19 @@ class Booking(models.Model):
     PAYMENT_STATUS_CHOICES = [
         ('pending', 'Pending Payment'),
         ('paid', 'Payment Verified'),
+        ('failed', 'Payment Failed'),
         ('refunded', 'Refunded'),
+    ]
+
+    PAYMENT_METHOD_CHOICES = [
+        ('online', 'Online Payment (Razorpay)'),
+        ('offline', 'Pay at Pickup (Cash)'),
+    ]
+
+    REFUND_STATUS_CHOICES = [
+        ('pending', 'Refund Processing'),
+        ('processed', 'Refund Completed'),
+        ('failed', 'Refund Failed'),
     ]
 
     booking_reference = models.CharField(max_length=25, unique=True, editable=False)
@@ -48,6 +72,10 @@ class Booking(models.Model):
 
     # Immutable booking-time pricing snapshots
     daily_price = models.DecimalField(max_digits=10, decimal_places=2)
+    original_rental_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    discount_type = models.CharField(max_length=50, blank=True, default='')
     rental_amount = models.DecimalField(max_digits=10, decimal_places=2)
     deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -58,7 +86,22 @@ class Booking(models.Model):
         default='pending_approval'
     )
 
+    # Delivery & Contact Address
+    renter_address = models.ForeignKey(
+        'addresses.Address',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='bookings'
+    )
+    renter_address_snapshot = models.TextField(blank=True, default='')
+
     # Payment Security & Audit
+    payment_method = models.CharField(
+        max_length=20,
+        choices=PAYMENT_METHOD_CHOICES,
+        default='online'
+    )
     payment_status = models.CharField(
         max_length=20,
         choices=PAYMENT_STATUS_CHOICES,
@@ -73,6 +116,30 @@ class Booking(models.Model):
         related_name='verified_payments'
     )
     payment_transaction_id = models.CharField(max_length=100, blank=True, default='')
+    razorpay_order_id = models.CharField(max_length=100, blank=True, default='', db_index=True)
+
+    # Refund Security & Audit
+    refund_transaction_id = models.CharField(max_length=100, blank=True, default='', db_index=True)
+    refund_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    refund_status = models.CharField(
+        max_length=20,
+        choices=REFUND_STATUS_CHOICES,
+        blank=True,
+        default=''
+    )
+    refund_initiated_at = models.DateTimeField(null=True, blank=True)
+    refunded_at = models.DateTimeField(null=True, blank=True)
+    refund_error = models.TextField(blank=True, default='')
+
+    # Manual Offline Cash Return Tracking
+    cash_returned_at = models.DateTimeField(null=True, blank=True)
+    cash_returned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='confirmed_cash_returns'
+    )
 
     # Lifecycle Audit Timestamps & Actors
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -91,6 +158,21 @@ class Booking(models.Model):
 
     picked_up_at = models.DateTimeField(null=True, blank=True)
     returned_at = models.DateTimeField(null=True, blank=True)
+
+    # Pickup OTP Verification & Handover Audit
+    pickup_otp_hash = models.CharField(max_length=128, blank=True, default='')
+    pickup_otp_expires_at = models.DateTimeField(null=True, blank=True)
+    pickup_otp_attempts = models.PositiveSmallIntegerField(default=0)
+    pickup_otp_created_at = models.DateTimeField(null=True, blank=True)
+    pickup_otp_verified_at = models.DateTimeField(null=True, blank=True)
+    pickup_confirmed_at = models.DateTimeField(null=True, blank=True)
+    pickup_confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='confirmed_pickups'
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -124,14 +206,71 @@ class Booking(models.Model):
         return self.status in ['pending_approval', 'waiting_for_pickup']
 
     @property
+    def renter_address_data(self):
+        """
+        Returns structured address dictionary from snapshot or active foreign key.
+        Preserves historical address details even if the address is edited or deleted later.
+        """
+        if self.renter_address_snapshot:
+            try:
+                parsed = json.loads(self.renter_address_snapshot)
+                if isinstance(parsed, dict) and parsed:
+                    return parsed
+            except Exception:
+                pass
+        if self.renter_address:
+            addr = self.renter_address
+            return {
+                'id': addr.id,
+                'full_name': addr.full_name,
+                'house_number': addr.house_number,
+                'address': addr.address,
+                'area': addr.area,
+                'landmark': addr.landmark or '',
+                'city': addr.city,
+                'state': addr.state,
+                'pincode': addr.pincode,
+                'country': addr.country,
+                'address_type': addr.address_type,
+                'full_formatted_address': (
+                    f"{addr.house_number}, {addr.address}, {addr.area}, "
+                    f"{addr.landmark + ', ' if addr.landmark else ''}"
+                    f"{addr.city}, {addr.state} - {addr.pincode}"
+                )
+            }
+        # Fallback to renter's first address if legacy booking
+        first_addr = self.renter.addresses.first() if self.renter else None
+        if first_addr:
+            return {
+                'id': first_addr.id,
+                'full_name': first_addr.full_name,
+                'house_number': first_addr.house_number,
+                'address': first_addr.address,
+                'area': first_addr.area,
+                'landmark': first_addr.landmark or '',
+                'city': first_addr.city,
+                'state': first_addr.state,
+                'pincode': first_addr.pincode,
+                'country': first_addr.country,
+                'address_type': first_addr.address_type,
+                'full_formatted_address': (
+                    f"{first_addr.house_number}, {first_addr.address}, {first_addr.area}, "
+                    f"{first_addr.landmark + ', ' if first_addr.landmark else ''}"
+                    f"{first_addr.city}, {first_addr.state} - {first_addr.pincode}"
+                )
+            }
+        return None
+
+    @property
     def return_deadline(self):
         """
         Exact return deadline calculated by adding selected rental duration
-        in 24-hour periods to the actual owner pickup confirmation timestamp (picked_up_at).
+        in 24-hour periods to the actual owner pickup confirmation timestamp.
         Returns None if the booking has not been picked up yet.
         """
-        if self.picked_up_at and self.duration_days:
-            return self.picked_up_at + timedelta(days=self.duration_days)
+        effective_pickup_time = self.pickup_confirmed_at or self.picked_up_at
+        if effective_pickup_time and self.duration_days:
+            return effective_pickup_time + timedelta(days=self.duration_days)
         return None
 
     @property
@@ -139,37 +278,55 @@ class Booking(models.Model):
         """
         Asia/Kolkata formatted string of return_deadline for display.
         """
-        deadline = self.return_deadline
-        if not deadline:
-            return None
-        import zoneinfo
-        kolkata_tz = zoneinfo.ZoneInfo('Asia/Kolkata')
-        kolkata_dt = deadline.astimezone(kolkata_tz)
-        return kolkata_dt.strftime('%d %b %Y, %I:%M %p IST')
+        return _format_kolkata_dt(self.return_deadline)
+
+    @property
+    def pickup_confirmed_at_display(self):
+        """
+        Asia/Kolkata formatted string of pickup_confirmed_at for display.
+        """
+        return _format_kolkata_dt(self.pickup_confirmed_at or self.picked_up_at)
 
     @property
     def picked_up_at_display(self):
         """
         Asia/Kolkata formatted string of picked_up_at for display.
         """
-        if not self.picked_up_at:
-            return None
-        import zoneinfo
-        kolkata_tz = zoneinfo.ZoneInfo('Asia/Kolkata')
-        kolkata_dt = self.picked_up_at.astimezone(kolkata_tz)
-        return kolkata_dt.strftime('%d %b %Y, %I:%M %p IST')
+        return _format_kolkata_dt(self.pickup_confirmed_at or self.picked_up_at)
+
+    @property
+    def renter_phone_masked(self):
+        """
+        Returns masked phone number of renter (e.g. ******3210).
+        """
+        phone = getattr(self.renter, 'phone_number', '') or ''
+        if not phone:
+            return ''
+        digits = ''.join(ch for ch in phone if ch.isdigit())
+        if len(digits) <= 4:
+            return phone
+        return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
 
     @property
     def returned_at_display(self):
         """
         Asia/Kolkata formatted string of returned_at for display.
         """
-        if not self.returned_at:
-            return None
-        import zoneinfo
-        kolkata_tz = zoneinfo.ZoneInfo('Asia/Kolkata')
-        kolkata_dt = self.returned_at.astimezone(kolkata_tz)
-        return kolkata_dt.strftime('%d %b %Y, %I:%M %p IST')
+        return _format_kolkata_dt(self.returned_at)
+
+    @property
+    def refunded_at_display(self):
+        """
+        Asia/Kolkata formatted string of refunded_at for display.
+        """
+        return _format_kolkata_dt(self.refunded_at)
+
+    @property
+    def cash_returned_at_display(self):
+        """
+        Asia/Kolkata formatted string of cash_returned_at for display.
+        """
+        return _format_kolkata_dt(self.cash_returned_at)
 
 
 class IssueReport(models.Model):
@@ -288,6 +445,22 @@ class PushSubscription(models.Model):
 
     def __str__(self):
         return f"PushSubscription for {self.user.email} ({self.endpoint[:30]}...)"
+
+
+class ProcessedWebhookEvent(models.Model):
+    """
+    Idempotency registry for inbound Razorpay webhook events.
+    Guarantees that re-delivered webhook payloads are processed exactly once.
+    """
+    event_id = models.CharField(max_length=100, unique=True, db_index=True)
+    event_type = models.CharField(max_length=50, blank=True, default='')
+    processed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-processed_at']
+
+    def __str__(self):
+        return f"{self.event_id} ({self.event_type})"
 
 
 

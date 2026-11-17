@@ -12,14 +12,10 @@ logger = logging.getLogger(__name__)
 _CACHED_VAPID = None
 
 
-def get_vapid():
-    """
-    Returns the configured Vapid instance.
-    Prioritizes environment variables / Django settings.
-    Falls back to a persistent development key if not set.
-    """
+def get_vapid():   #get_vapid() is used to load or generate a VAPID private key for authenticating RentBee browser push notifications.#
+    
     global _CACHED_VAPID
-    if _CACHED_VAPID is not None:
+    if _CACHED_VAPID is not None:  #Used to store the VAPID object for reuse.#
         return _CACHED_VAPID
 
     priv_key = getattr(settings, 'VAPID_PRIVATE_KEY', '') or os.environ.get('VAPID_PRIVATE_KEY', '')

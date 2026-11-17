@@ -14,6 +14,47 @@ from .models import Category, Item, ItemImage, RentalKitItem, WishlistItem
 from .serializers import CategorySerializer, ItemSerializer, WishlistItemSerializer
 
 
+def _save_uploaded_item_images(item, raw_files, primary_idx=0):   # raw:images upload by user #
+    """Processes and attaches multiple uploaded images to an Item."""
+    for idx, f in enumerate(raw_files):  # f :Current image file. enumerate: it give indux and file#
+        processed_file = process_item_image(f) #process:image compress, resize, format conversion#
+        ItemImage.objects.create(
+            item=item, #it specify images belongs to items #
+            image=processed_file, #save#
+            is_primary=(idx == primary_idx)
+        )
+    if raw_files and not item.images.filter(is_primary=True).exists():
+        first_img = item.images.first()
+        if first_img:
+            first_img.is_primary = True
+            first_img.save(update_fields=['is_primary'])
+
+
+def _save_rental_kit_entries(item, rental_kit_raw, replace=False):
+    """Parses and attaches rental kit items """
+    if rental_kit_raw is None:
+        return
+    if isinstance(rental_kit_raw, str):
+        try:
+            rental_kit_entries = json.loads(rental_kit_raw)
+        except Exception:
+            rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()] 
+            #to read in a json fornmat or a comma separated string#
+    elif isinstance(rental_kit_raw, list):
+        rental_kit_entries = rental_kit_raw #when its a python data its directly use#
+    else:
+        rental_kit_entries = []
+
+    if replace:
+        item.rental_kit_items.all().delete()
+
+    for entry in rental_kit_entries:
+        if isinstance(entry, str) and entry.strip():
+            RentalKitItem.objects.create(item=item, name=entry.strip())
+        elif isinstance(entry, dict) and entry.get('name', '').strip():
+            RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+
+
 # ==========================================
 # CATEGORY VIEWS (Admin)
 # ==========================================
@@ -23,7 +64,7 @@ class CategoryListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
-        # Exclude reserved "All Categories" sentinel — it must never appear as a real DB category
+        
         qs = Category.objects.filter(is_deleted=False).exclude(name__iexact='all categories').exclude(icon='▦')
         if search := self.request.query_params.get('search'):
             qs = qs.filter(Q(name__icontains=search) | Q(slug__icontains=search))
@@ -135,46 +176,14 @@ class AdminItemListCreateView(APIView):
         with transaction.atomic():
             item = serializer.save(owner=request.user)
 
-            # Process multiple uploaded images with Pillow
             raw_files = request.FILES.getlist('images')
             try:
                 primary_idx = int(request.data.get('primary_image_index', 0))
             except (ValueError, TypeError):
                 primary_idx = 0
 
-            for idx, f in enumerate(raw_files):
-                processed_file = process_item_image(f)
-                ItemImage.objects.create(
-                    item=item,
-                    image=processed_file,
-                    is_primary=(idx == primary_idx)
-                )
-
-            # If files were uploaded but none marked primary, mark the first one
-            if raw_files and not item.images.filter(is_primary=True).exists():
-                first_img = item.images.first()
-                if first_img:
-                    first_img.is_primary = True
-                    first_img.save(update_fields=['is_primary'])
-
-            # Process rental kit entries if provided
-            rental_kit_raw = request.data.get('rental_kit')
-            if rental_kit_raw is not None:
-                if isinstance(rental_kit_raw, str):
-                    try:
-                        rental_kit_entries = json.loads(rental_kit_raw)
-                    except Exception:
-                        rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
-                elif isinstance(rental_kit_raw, list):
-                    rental_kit_entries = rental_kit_raw
-                else:
-                    rental_kit_entries = []
-
-                for entry in rental_kit_entries:
-                    if isinstance(entry, str) and entry.strip():
-                        RentalKitItem.objects.create(item=item, name=entry.strip())
-                    elif isinstance(entry, dict) and entry.get('name', '').strip():
-                        RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+            _save_uploaded_item_images(item, raw_files, primary_idx)
+            _save_rental_kit_entries(item, request.data.get('rental_kit'))
 
         return Response(ItemSerializer(item, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
@@ -238,23 +247,7 @@ class AdminItemDetailView(APIView):
 
         # Process rental kit entries if explicitly provided
         if 'rental_kit' in request.data:
-            rental_kit_raw = request.data.get('rental_kit')
-            if isinstance(rental_kit_raw, str):
-                try:
-                    rental_kit_entries = json.loads(rental_kit_raw)
-                except Exception:
-                    rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
-            elif isinstance(rental_kit_raw, list):
-                rental_kit_entries = rental_kit_raw
-            else:
-                rental_kit_entries = []
-
-            item.rental_kit_items.all().delete()
-            for entry in rental_kit_entries:
-                if isinstance(entry, str) and entry.strip():
-                    RentalKitItem.objects.create(item=item, name=entry.strip())
-                elif isinstance(entry, dict) and entry.get('name', '').strip():
-                    RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+            _save_rental_kit_entries(item, request.data.get('rental_kit'), replace=True)
 
         return Response(ItemSerializer(item, context={'request': request}).data)
 
@@ -287,46 +280,14 @@ class PublicItemListView(APIView):
         with transaction.atomic():
             item = serializer.save(owner=request.user)
 
-            # Process multiple uploaded images with Pillow
             raw_files = request.FILES.getlist('images')
             try:
                 primary_idx = int(request.data.get('primary_image_index', 0))
             except (ValueError, TypeError):
                 primary_idx = 0
 
-            for idx, f in enumerate(raw_files):
-                processed_file = process_item_image(f)
-                ItemImage.objects.create(
-                    item=item,
-                    image=processed_file,
-                    is_primary=(idx == primary_idx)
-                )
-
-            # If files were uploaded but none marked primary, mark the first one
-            if raw_files and not item.images.filter(is_primary=True).exists():
-                first_img = item.images.first()
-                if first_img:
-                    first_img.is_primary = True
-                    first_img.save(update_fields=['is_primary'])
-
-            # Process rental kit entries if provided
-            rental_kit_raw = request.data.get('rental_kit')
-            if rental_kit_raw is not None:
-                if isinstance(rental_kit_raw, str):
-                    try:
-                        rental_kit_entries = json.loads(rental_kit_raw)
-                    except Exception:
-                        rental_kit_entries = [x.strip() for x in rental_kit_raw.split(',') if x.strip()]
-                elif isinstance(rental_kit_raw, list):
-                    rental_kit_entries = rental_kit_raw
-                else:
-                    rental_kit_entries = []
-
-                for entry in rental_kit_entries:
-                    if isinstance(entry, str) and entry.strip():
-                        RentalKitItem.objects.create(item=item, name=entry.strip())
-                    elif isinstance(entry, dict) and entry.get('name', '').strip():
-                        RentalKitItem.objects.create(item=item, name=entry['name'].strip())
+            _save_uploaded_item_images(item, raw_files, primary_idx)
+            _save_rental_kit_entries(item, request.data.get('rental_kit'))
 
         return Response(ItemSerializer(item, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
@@ -472,7 +433,7 @@ class WishlistListView(APIView):
         item = get_object_or_404(Item, pk=item_id, is_deleted=False)
 
         with transaction.atomic():
-            wishlist_item, created = WishlistItem.objects.get_or_create(
+            _, created = WishlistItem.objects.get_or_create(
                 user=request.user,
                 item=item
             )

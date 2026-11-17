@@ -1,5 +1,10 @@
 
-import { apiRequest } from './authentication'
+import { apiRequest, getAccessToken } from './authentication'
+
+const API_BASE_URL =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
+  'http://127.0.0.1:8000/api'
+
 
 // PROFILE API
 
@@ -134,6 +139,48 @@ export function softDeleteAdminItem(id) {
   })
 }
 
+// BOOKING MANAGEMENT API (Admin)
+export function getAdminBookings(params = {}) {
+  const q = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+  ).toString()
+  return apiRequest(`/admin/bookings/${q ? `?${q}` : ''}`)
+}
+
+export function getAdminBookingDetails(id) {
+  return apiRequest(`/admin/bookings/${id}/`)
+}
+
+export function updateAdminBookingStatus(id, payload) {
+  return apiRequest(`/admin/bookings/${id}/status/`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function adminReturnAction(id, payload) {
+  return apiRequest(`/admin/bookings/${id}/return-action/`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// INVENTORY MANAGEMENT API (Admin)
+export function getAdminInventory(params = {}) {
+  const q = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+  ).toString()
+  return apiRequest(`/admin/inventory/${q ? `?${q}` : ''}`)
+}
+
+export function updateAdminStock(id, stock) {
+  return apiRequest(`/admin/inventory/${id}/stock/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ stock }),
+  })
+}
+
+
 // PUBLIC ITEMS & CATEGORIES API (Customer Frontend)
 export function getPublicCategories() {
   return apiRequest('/categories/')
@@ -186,6 +233,68 @@ export function cancelBooking(id, reason = '') {
   })
 }
 
+export function retryBookingRefund(id) {
+  return apiRequest(`/bookings/${id}/retry-refund/`, {
+    method: 'POST',
+  })
+}
+
+export function confirmOfflineRefund(id) {
+  return apiRequest(`/bookings/${id}/confirm-offline-refund/`, {
+    method: 'POST',
+  })
+}
+
+export function createPaymentOrder(bookingId) {
+  return apiRequest(`/bookings/${bookingId}/create-payment-order/`, {
+    method: 'POST',
+  })
+}
+
+export function verifyPayment(bookingId, paymentData) {
+  return apiRequest(`/bookings/${bookingId}/verify-payment/`, {
+    method: 'POST',
+    body: JSON.stringify(paymentData),
+  })
+}
+
+export function confirmOfflineBookingPayment(id) {
+  return apiRequest(`/bookings/${id}/confirm-offline-payment/`, {
+    method: 'POST',
+  })
+}
+
+export async function downloadBookingInvoice(id, bookingReference = '') {
+  const token = getAccessToken()
+  const response = await fetch(`${API_BASE_URL}/bookings/${id}/invoice/`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
+
+  if (!response.ok) {
+    let errorMsg = 'Failed to download invoice / receipt.'
+    try {
+      const errJson = await response.json()
+      if (errJson?.error) {
+        errorMsg = errJson.error
+      }
+    } catch {}
+    throw new Error(errorMsg)
+  }
+
+  const blob = await response.blob()
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `RentBee_Invoice_${bookingReference || id}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
+
+
 export function ownerApproveBooking(id) {
   return apiRequest(`/bookings/${id}/approve/`, {
     method: 'POST',
@@ -199,9 +308,23 @@ export function ownerRejectBooking(id, reason = '') {
   })
 }
 
-export function confirmPickup(id) {
+export function sendPickupOtp(id) {
+  return apiRequest(`/bookings/${id}/send-pickup-otp/`, {
+    method: 'POST',
+  })
+}
+
+export function verifyPickupOtp(id, otp) {
+  return apiRequest(`/bookings/${id}/verify-pickup-otp/`, {
+    method: 'POST',
+    body: JSON.stringify({ otp }),
+  })
+}
+
+export function confirmPickup(id, otp) {
   return apiRequest(`/bookings/${id}/confirm-pickup/`, {
     method: 'POST',
+    body: JSON.stringify({ otp }),
   })
 }
 
@@ -227,6 +350,10 @@ export function getHostBookings(params = {}) {
 
 export function getHostReports() {
   return apiRequest('/bookings/host/reports/')
+}
+
+export function checkDiscountEligibility() {
+  return apiRequest('/bookings/discount-eligibility/')
 }
 
 export function checkItemAvailability(itemId, startDate, endDate, requestedQuantity) {
