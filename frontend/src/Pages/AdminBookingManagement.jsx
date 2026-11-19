@@ -48,8 +48,8 @@ export default function AdminBookingManagement() {
 
   // Detail Modal & Action Modal State
   const [selectedBooking, setSelectedBooking] = useState(null)
-  const [ setDetailLoading] = useState(false)
-  const [ setDetailError] = useState('')
+  const [ DetailLoading, setDetailLoading] = useState(false)
+  const [DetailError, setDetailError] = useState('')
 
   // Confirmation / Action Dialog State
   const [actionModal, setActionModal] = useState({
