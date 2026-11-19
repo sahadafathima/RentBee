@@ -48,8 +48,8 @@ export default function AdminBookingManagement() {
 
   // Detail Modal & Action Modal State
   const [selectedBooking, setSelectedBooking] = useState(null)
-  const [ DetailLoading, setDetailLoading] = useState(false)
-  const [DetailError, setDetailError] = useState('')
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
 
   // Confirmation / Action Dialog State
   const [actionModal, setActionModal] = useState({
@@ -140,6 +140,10 @@ export default function AdminBookingManagement() {
 
   // View Details
   const handleOpenDetails = (id) => {
+    const existing = bookings.find((b) => b.id === id)
+    if (existing) {
+      setSelectedBooking(existing)
+    }
     setDetailLoading(true)
     setDetailError('')
     getAdminBookingDetails(id)
@@ -147,7 +151,11 @@ export default function AdminBookingManagement() {
         setSelectedBooking(data)
       })
       .catch((err) => {
-        setDetailError(err.message || 'Failed to load booking details.')
+        const msg = err.message || 'Failed to load booking details.'
+        setDetailError(msg)
+        if (!existing) {
+          setError(msg)
+        }
       })
       .finally(() => {
         setDetailLoading(false)
@@ -718,6 +726,12 @@ export default function AdminBookingManagement() {
                   <p className="text-[11px] text-gray-400 mt-1">
                     Created on: {formatKolkataDateTime(selectedBooking.created_at)}
                   </p>
+                  {detailLoading && (
+                    <span className="text-[10px] text-orange-600 font-medium">Updating details...</span>
+                  )}
+                  {detailError && (
+                    <span className="text-[10px] text-rose-600 font-medium block mt-1">{detailError}</span>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -742,8 +756,9 @@ export default function AdminBookingManagement() {
                     <div className="pt-2 border-t border-orange-100/70 text-[11px] text-gray-600">
                       <span className="font-semibold block text-gray-500">Delivery Address:</span>
                       <span>
-                        {selectedBooking.renter_address.house_number ? `${selectedBooking.renter_address.house_number}, ` : ''}
-                        {selectedBooking.renter_address.address}, {selectedBooking.renter_address.city} - {selectedBooking.renter_address.pincode}
+                        {selectedBooking.renter_address.full_formatted_address || (
+                          `${selectedBooking.renter_address.house_number ? `${selectedBooking.renter_address.house_number}, ` : ''}${selectedBooking.renter_address.address || ''}, ${selectedBooking.renter_address.city || ''} - ${selectedBooking.renter_address.pincode || ''}`
+                        )}
                       </span>
                     </div>
                   )}

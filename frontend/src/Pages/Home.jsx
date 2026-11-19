@@ -6,7 +6,6 @@ import PopularRentals from '../Components/PopularRentals'
 import HowItWorks from '../Components/HowItWorks'
 import ListItemBanner from '../Components/ListItemBanner'
 import Footer from '../Components/Footer'
-import BookingNotifications from '../Components/BookingNotifications'
 
 function Home() {
   const [selectedCategory, setSelectedCategory] = useState('')
@@ -15,7 +14,6 @@ function Home() {
     <div className="min-h-screen bg-[#FFFCF9]">
       <Navbar />
       <main>
-        <BookingNotifications />
         <HeroSection />
         <BrowseCategories
           selectedCategory={selectedCategory}
