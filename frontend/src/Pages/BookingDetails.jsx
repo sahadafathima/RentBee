@@ -40,7 +40,7 @@ import {
   Tag,
   RefreshCcw,
 } from 'lucide-react'
-import { formatKolkataDateTime, calculateReturnCountdown } from '../utils/dateUtils'
+import { formatKolkataDateTime } from '../utils/dateUtils'
 
 export default function BookingDetails() {
   const { id } = useParams()

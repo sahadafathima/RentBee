@@ -1,7 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Calendar, ShieldCheck, UserCheck, AlertCircle, Clock, Package, Tag } from 'lucide-react'
 import ReturnCountdownTimer from './ReturnCountdownTimer'
-import { formatKolkataDateTime, calculateReturnCountdown } from '../utils/dateUtils'
 
 export default function BookingCard({ booking, onCancelClick }) {
   if (!booking) return null

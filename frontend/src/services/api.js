@@ -279,7 +279,9 @@ export async function downloadBookingInvoice(id, bookingReference = '') {
       if (errJson?.error) {
         errorMsg = errJson.error
       }
-    } catch {}
+    } catch {
+      // Fallback if response body is not valid JSON
+    }
     throw new Error(errorMsg)
   }
 

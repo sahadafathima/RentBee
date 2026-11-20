@@ -479,8 +479,20 @@ class BookingSystemTests(TestCase):
         self.assertIsNotNone(booking.payment_verified_at)
         self.assertEqual(booking.payment_transaction_id, f"ADMIN-VERIFY-{booking.id}")
 
-    def test_cancellation_pre_pickup_restriction(self):
+    @patch('bookings.services.get_razorpay_client')
+    def test_cancellation_pre_pickup_restriction(self, mock_get_client):
         """Cancellation allowed only in pending_approval & waiting_for_pickup; blocked in rental_in_progress."""
+        mock_rzp = MagicMock()
+        mock_get_client.return_value = mock_rzp
+        mock_rzp.payment.fetch_multiple_refund.return_value = {'count': 0, 'items': []}
+        mock_rzp.payment.refund.return_value = {
+            'id': 'rfnd_test_pre_pickup',
+            'entity': 'refund',
+            'amount': 800000,
+            'currency': 'INR',
+            'status': 'pending',
+            'payment_id': 'pay_test_pre_pickup'
+        }
         today = timezone.localdate()
         booking = Booking.objects.create(
             renter=self.renter,
@@ -494,16 +506,21 @@ class BookingSystemTests(TestCase):
             deposit_amount=Decimal('5000.00'),
             total_amount=Decimal('8000.00'),
             status='waiting_for_pickup',
-            payment_status='paid'
+            payment_status='paid',
+            payment_method='online',
+            payment_transaction_id='pay_test_pre_pickup'
         )
 
-        # Renter cancels before pickup -> succeeds
+        # Renter cancels before pickup -> succeeds and initiates 100% refund
         self.client.force_authenticate(user=self.renter)
         res_cancel = self.client.post(f'/api/bookings/{booking.id}/cancel/', {'reason': 'Change of plans'})
         self.assertEqual(res_cancel.status_code, status.HTTP_200_OK)
         booking.refresh_from_db()
         self.assertEqual(booking.status, 'cancelled')
         self.assertEqual(booking.cancellation_reason, 'Change of plans')
+        self.assertEqual(booking.payment_status, 'paid')
+        self.assertEqual(booking.refund_status, 'pending')
+        self.assertEqual(booking.refund_amount, Decimal('8000.00'))
 
         # Now test rental_in_progress cancellation attempt
         active_booking = Booking.objects.create(
@@ -796,7 +813,8 @@ class BookingSystemTests(TestCase):
 
         # Now renter cancels their booking
         self.client.force_authenticate(user=self.renter)
-        res_cancel = self.client.post(f'/api/bookings/{booking_id}/cancel/', {'reason': 'Changed plans'}, format='json')
+        with self.captureOnCommitCallbacks(execute=True):
+            res_cancel = self.client.post(f'/api/bookings/{booking_id}/cancel/', {'reason': 'Changed plans'}, format='json')
         self.assertEqual(res_cancel.status_code, status.HTTP_200_OK)
 
         # Check that InAppNotification was created for Charlie Stranger
@@ -1102,9 +1120,11 @@ class QuantityBookingTests(TestCase):
         response = self.request(self.renter, 3)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertEqual(response.data['requested_quantity'], 3)
-        self.assertEqual(Decimal(str(response.data['rental_amount'])), Decimal('9000.00'))
+        self.assertEqual(Decimal(str(response.data['original_rental_amount'])), Decimal('9000.00'))
+        self.assertEqual(Decimal(str(response.data['discount_amount'])), Decimal('900.00'))
+        self.assertEqual(Decimal(str(response.data['rental_amount'])), Decimal('8100.00'))
         self.assertEqual(Decimal(str(response.data['deposit_amount'])), Decimal('15000.00'))
-        self.assertEqual(Decimal(str(response.data['total_amount'])), Decimal('24000.00'))
+        self.assertEqual(Decimal(str(response.data['total_amount'])), Decimal('23100.00'))
         booking = Booking.objects.get(pk=response.data['id'])
         self.assertEqual(booking.requested_quantity, 3)
 
@@ -1785,7 +1805,7 @@ class WebPushNotificationTests(TestCase):
             mock_push.assert_called_once()
             call_kwargs = mock_push.call_args[1]
             sent_data = json.loads(call_kwargs['data'])
-            self.assertIn('declined', sent_data['body'].lower())
+            self.assertIn('rejected', sent_data['body'].lower())
             self.assertIn(rejection_reason, sent_data['body'])
             self.assertEqual(sent_data['data']['url'], f'/bookings/{booking.id}')
 
@@ -2022,14 +2042,6 @@ class RazorpayPaymentManagementTests(TestCase):
 
     @patch('bookings.services.get_razorpay_client')
     def test_create_order_allowed_when_pending_approval(self, mock_client):
-        mock_rzp = MagicMock()
-        mock_client.return_value = mock_rzp
-        mock_rzp.order.create.return_value = {
-            'id': 'order_rzp_pending_123',
-            'amount': 300000,
-            'currency': 'INR',
-            'status': 'created'
-        }
         today = timezone.localdate()
         unapproved = Booking.objects.create(
             renter=self.renter,
@@ -2047,10 +2059,9 @@ class RazorpayPaymentManagementTests(TestCase):
         )
         self.client.force_authenticate(user=self.renter)
         res = self.client.post(f'/api/bookings/{unapproved.id}/create-payment-order/')
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data['order_id'], 'order_rzp_pending_123')
-        unapproved.refresh_from_db()
-        self.assertEqual(unapproved.razorpay_order_id, 'order_rzp_pending_123')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Payment can only be initiated after the owner accepts the booking request.', res.data.get('error', ''))
+        mock_client.assert_not_called()
 
     @patch('bookings.services.get_razorpay_client')
     def test_create_order_allowed_when_payment_failed_retry(self, mock_client):
@@ -2073,7 +2084,7 @@ class RazorpayPaymentManagementTests(TestCase):
             daily_price=Decimal('1500.00'),
             rental_amount=Decimal('3000.00'),
             total_amount=Decimal('3000.00'),
-            status='pending_approval',
+            status='waiting_for_pickup',
             payment_status='failed',
             payment_method='online'
         )
@@ -2131,7 +2142,7 @@ class RazorpayPaymentManagementTests(TestCase):
         from bookings.serializers import BookingDetailSerializer
         today = timezone.localdate()
 
-        # Scenario 1: Online + pending_approval + pending payment -> can_pay True
+        # Scenario 1: Online + pending_approval + pending payment -> can_pay False (requires owner approval first)
         b1 = Booking.objects.create(
             renter=self.renter, item=self.item, owner=self.owner,
             start_date=today + timedelta(days=2), end_date=today + timedelta(days=4),
@@ -2142,7 +2153,7 @@ class RazorpayPaymentManagementTests(TestCase):
         req = MagicMock()
         req.user = self.renter
         data1 = BookingDetailSerializer(b1, context={'request': req}).data
-        self.assertTrue(data1['can_pay'])
+        self.assertFalse(data1['can_pay'])
 
         # Scenario 2: Online + waiting_for_pickup + pending payment -> can_pay True
         b2 = Booking.objects.create(
@@ -2155,12 +2166,12 @@ class RazorpayPaymentManagementTests(TestCase):
         data2 = BookingDetailSerializer(b2, context={'request': req}).data
         self.assertTrue(data2['can_pay'])
 
-        # Scenario 3: Online + failed payment -> can_pay True
+        # Scenario 3: Online + waiting_for_pickup + failed payment -> can_pay True (retry allowed)
         b3 = Booking.objects.create(
             renter=self.renter, item=self.item, owner=self.owner,
             start_date=today + timedelta(days=2), end_date=today + timedelta(days=4),
             duration_days=2, daily_price=Decimal('1500.00'), rental_amount=Decimal('3000.00'),
-            total_amount=Decimal('3000.00'), status='pending_approval', payment_status='failed',
+            total_amount=Decimal('3000.00'), status='waiting_for_pickup', payment_status='failed',
             payment_method='online'
         )
         data3 = BookingDetailSerializer(b3, context={'request': req}).data

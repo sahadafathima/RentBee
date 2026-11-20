@@ -12,7 +12,6 @@ import {
   getHostReports,
   ownerApproveBooking,
   ownerRejectBooking,
-  confirmPickup,
   confirmReturn,
   cancelBooking,
   confirmOfflineBookingPayment,
@@ -36,7 +35,7 @@ import {
   Search,
   Banknote,
 } from 'lucide-react'
-import { formatKolkataDateTime, calculateReturnCountdown } from '../utils/dateUtils'
+import { formatKolkataDateTime } from '../utils/dateUtils'
 
 async function fetchAllOutgoingBookings(params = {}) {
   const firstPage = await getMyBookings({ ...params, page: 1, page_size: 100 })
@@ -300,21 +299,6 @@ export default function HostHub() {
       reloadData()
     } catch (err) {
       alert(err.message || 'Failed to reject booking.')
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  // Host Action: Confirm Pickup
-  const handlePickup = async (id) => {
-    setActionLoading(true)
-    try {
-      await confirmPickup(id)
-      showToast('Item handover confirmed! Rental is now in progress.')
-      window.dispatchEvent(new Event('rentbee:bookings-changed'))
-      reloadData()
-    } catch (err) {
-      alert(err.message || 'Failed to confirm pickup.')
     } finally {
       setActionLoading(false)
     }

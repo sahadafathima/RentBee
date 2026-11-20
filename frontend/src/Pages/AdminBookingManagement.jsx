@@ -67,11 +67,21 @@ export default function AdminBookingManagement() {
   const [actionReason, setActionReason] = useState('')
   const [actionError, setActionError] = useState('')
   const [submittingAction, setSubmittingAction] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
 
-  // Fetch Bookings
-  const fetchBookings = () => {
+  // Reset loading and error states during render when request parameters change
+  const currentRequestKey = `${page}|${activeTab}|${appliedSearch}|${statusFilter}|${paymentStatusFilter}|${sort}|${createdAfter}|${createdBefore}|${startDateFilter}|${endDateFilter}|${refreshKey}`
+  const [prevRequestKey, setPrevRequestKey] = useState(currentRequestKey)
+
+  if (currentRequestKey !== prevRequestKey) {
+    setPrevRequestKey(currentRequestKey)
     setLoading(true)
     setError('')
+  }
+
+  // Fetch Bookings with cancellation guard to prevent race conditions and cascading renders
+  useEffect(() => {
+    let isCurrent = true
     const params = {
       page,
       page_size: 10,
@@ -88,22 +98,27 @@ export default function AdminBookingManagement() {
 
     getAdminBookings(params)
       .then((res) => {
+        if (!isCurrent) return
         setBookings(res.results || [])
         setCounts(res.counts || {})
         setProductSummaries(res.product_summaries || [])
         setTotalPages(res.total_pages || 1)
         setTotalCount(res.count || 0)
+        setError('')
       })
       .catch((err) => {
+        if (!isCurrent) return
         setError(err.message || 'Failed to load bookings.')
       })
       .finally(() => {
-        setLoading(false)
+        if (isCurrent) {
+          setLoading(false)
+        }
       })
-  }
 
-  useEffect(() => {
-    fetchBookings()
+    return () => {
+      isCurrent = false
+    }
   }, [
     page,
     activeTab,
@@ -115,6 +130,7 @@ export default function AdminBookingManagement() {
     createdBefore,
     startDateFilter,
     endDateFilter,
+    refreshKey,
   ])
 
   const handleSearchSubmit = (e) => {
@@ -204,7 +220,8 @@ export default function AdminBookingManagement() {
       }
 
       setActionModal((prev) => ({ ...prev, isOpen: false }))
-      fetchBookings()
+      setLoading(true)
+      setRefreshKey((k) => k + 1)
 
       // Refresh opened detail if active
       if (selectedBooking && selectedBooking.id === actionModal.bookingId) {

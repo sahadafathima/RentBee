@@ -1,21 +1,17 @@
-import { useEffect, useState, useTransition } from 'react'
+import { useEffect, useState } from 'react'
 import AdminLayout from '../Components/AdminLayout'
 import { getAdminInventory, updateAdminStock } from '../services/api'
 import {
   Package,
-  Layers,
-  Clock,
   CheckCircle2,
   AlertTriangle,
   Search,
-  Filter,
   RefreshCw,
   Edit3,
   ChevronLeft,
   ChevronRight,
   X,
   ShieldAlert,
-  ArrowUpDown,
   Boxes,
   Lock,
 } from 'lucide-react'
@@ -64,12 +60,23 @@ export default function AdminInventoryManagement() {
     setTimeout(() => setSuccessToast(''), 4000)
   }
 
-  // Fetch Inventory
-  const fetchInventory = (targetPage = page) => {
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  // Reset loading and error states during render when request parameters change
+  const currentRequestKey = `${page}|${appliedSearch}|${categoryFilter}|${stockStatusFilter}|${sort}|${refreshKey}`
+  const [prevRequestKey, setPrevRequestKey] = useState(currentRequestKey)
+
+  if (currentRequestKey !== prevRequestKey) {
+    setPrevRequestKey(currentRequestKey)
     setLoading(true)
     setError('')
+  }
+
+  // Fetch Inventory with cancellation guard to prevent race conditions and cascading renders
+  useEffect(() => {
+    let isCurrent = true
     const params = {
-      page: targetPage,
+      page,
       page_size: 10,
       search: appliedSearch,
       category: categoryFilter,
@@ -79,28 +86,40 @@ export default function AdminInventoryManagement() {
 
     getAdminInventory(params)
       .then((data) => {
+        if (!isCurrent) return
         setItems(data.results || [])
         setTotalPages(data.total_pages || 1)
         setTotalCount(data.count || 0)
-        setPage(data.page || targetPage)
+        if (data.page && data.page !== page) {
+          setPage(data.page)
+        }
         if (data.metrics) {
           setMetrics(data.metrics)
         }
         if (data.categories) {
           setCategories(data.categories)
         }
+        setError('')
       })
       .catch((err) => {
+        if (!isCurrent) return
         setError(err.message || 'Failed to fetch inventory data.')
       })
       .finally(() => {
-        setLoading(false)
+        if (isCurrent) {
+          setLoading(false)
+        }
       })
-  }
 
-  useEffect(() => {
-    fetchInventory(page)
-  }, [appliedSearch, categoryFilter, stockStatusFilter, sort, page])
+    return () => {
+      isCurrent = false
+    }
+  }, [appliedSearch, categoryFilter, stockStatusFilter, sort, page, refreshKey])
+
+  const handleRefresh = () => {
+    setLoading(true)
+    setRefreshKey((k) => k + 1)
+  }
 
   const handleSearchSubmit = (e) => {
     e.preventDefault()
@@ -156,7 +175,7 @@ export default function AdminInventoryManagement() {
       const res = await updateAdminStock(editingItem.id, parsedVal)
       notify(res.message || `Stock for "${editingItem.name}" updated to ${parsedVal}.`)
       closeEditModal()
-      fetchInventory(page)
+      handleRefresh()
     } catch (err) {
       setModalError(err.message || 'Failed to update stock.')
     } finally {
@@ -212,7 +231,7 @@ export default function AdminInventoryManagement() {
           </div>
           <button
             type="button"
-            onClick={() => fetchInventory(page)}
+            onClick={handleRefresh}
             disabled={loading}
             className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
           >

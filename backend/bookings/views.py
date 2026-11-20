@@ -253,8 +253,20 @@ class CancelBookingView(APIView):
 
         # Outside the locked database transaction, call Razorpay refund API
         if is_online_paid:
-            initiate_booking_refund(booking.id)
-            booking.refresh_from_db()
+            try:
+                initiate_booking_refund(booking.id)
+                booking.refresh_from_db()
+            except Exception as e:
+                logger.error(
+                    f"Failed to initiate refund during cancellation for booking {booking.id} "
+                    f"({booking.booking_reference}): {e}",
+                    exc_info=True
+                )
+                booking.refresh_from_db()
+                if booking.refund_status != 'failed':
+                    booking.refund_status = 'failed'
+                    booking.refund_error = str(e)
+                    booking.save(update_fields=['refund_status', 'refund_error', 'updated_at'])
 
         return Response({
             'message': 'Booking cancelled successfully.',
@@ -837,7 +849,7 @@ class VerifyPaymentView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if booking.payment_status == 'paid':
+            if booking.payment_status == 'paid' and booking.payment_transaction_id != payment_id:
                 return Response(
                     {'error': 'This booking has already been paid and verified.'},
                     status=status.HTTP_400_BAD_REQUEST

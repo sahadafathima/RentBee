@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, X, ShieldCheck, Banknote, CheckCircle2 } from 'lucide-react'
+import { AlertTriangle, X, ShieldCheck, Banknote } from 'lucide-react'
 
 export default function CancelBookingModal({ booking, isOpen, onClose, onConfirm, loading }) {
   const [reason, setReason] = useState('')

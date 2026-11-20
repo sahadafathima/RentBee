@@ -24,27 +24,30 @@ export default function PickupOtpModal({ booking, isOpen, onClose, onSuccess }) 
   const [confirmed, setConfirmed] = useState(false)
   const [confirmedAt, setConfirmedAt] = useState('')
 
-  // Reset state when booking or modal opens
-  useEffect(() => {
-    if (isOpen && booking) {
-      setOtpInput('')
-      setError('')
-      setAttemptsRemaining(null)
-      setConfirmed(false)
-      setConfirmedAt('')
+  // Synchronize modal state during render when opened for a booking (avoids cascading effect renders)
+  const [prevModalKey, setPrevModalKey] = useState('')
+  const currentModalKey = isOpen && booking ? `${booking.id}-${Boolean(booking.has_active_pickup_otp)}` : ''
 
-      // If backend reports an active OTP already generated, initialize state
-      if (booking.has_active_pickup_otp) {
-        setOtpSent(true)
-        setMaskedPhone(booking.renter_phone_masked || 'renter registered mobile')
-        setCooldown(booking.pickup_otp_resend_cooldown_seconds || 0)
-      } else {
-        setOtpSent(false)
-        setMaskedPhone(booking.renter_phone_masked || '')
-        setCooldown(0)
-      }
+  if (isOpen && currentModalKey !== prevModalKey) {
+    setPrevModalKey(currentModalKey)
+    setOtpInput('')
+    setError('')
+    setAttemptsRemaining(null)
+    setConfirmed(false)
+    setConfirmedAt('')
+
+    if (booking.has_active_pickup_otp) {
+      setOtpSent(true)
+      setMaskedPhone(booking.renter_phone_masked || 'renter registered mobile')
+      setCooldown(booking.pickup_otp_resend_cooldown_seconds || 0)
+    } else {
+      setOtpSent(false)
+      setMaskedPhone(booking.renter_phone_masked || '')
+      setCooldown(0)
     }
-  }, [isOpen, booking])
+  } else if (!isOpen && prevModalKey !== '') {
+    setPrevModalKey('')
+  }
 
   // Cooldown countdown timer
   useEffect(() => {
