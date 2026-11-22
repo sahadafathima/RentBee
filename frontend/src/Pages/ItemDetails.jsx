@@ -12,6 +12,7 @@ import {
   checkDiscountEligibility,
 } from '../services/api'
 import { calculateRentalDuration, getNextDayStr } from '../utils/dateUtils'
+import { resolveImageUrl } from '../utils/imageUrl'
 import { getAccessToken } from '../services/authentication'
 import {
   ChevronRight,
@@ -29,17 +30,6 @@ import {
   CheckCircle2,
   Tag,
 } from 'lucide-react'
-
-// Normalizes image URLs whether absolute or relative to backend media host
-function resolveImageUrl(url) {
-  if (!url) return null
-  if (url.startsWith('http://') || url.startsWith('https://')) return url
-  const apiBase =
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
-    'http://127.0.0.1:8000/api'
-  const origin = apiBase.replace(/\/api\/?$/, '')
-  return `${origin}${url.startsWith('/') ? '' : '/'}${url}`
-}
 
 export default function ItemDetails() {
   const { id } = useParams()

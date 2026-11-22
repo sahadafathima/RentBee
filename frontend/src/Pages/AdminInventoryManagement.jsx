@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import AdminLayout from '../Components/AdminLayout'
 import { getAdminInventory, updateAdminStock } from '../services/api'
+import { getItemImageUrl } from '../utils/imageUrl'
 import {
   Package,
   CheckCircle2,
@@ -15,16 +16,6 @@ import {
   Boxes,
   Lock,
 } from 'lucide-react'
-
-// Safely resolves item primary image URL with absolute path fallback
-const getItemImageUrl = (item) => {
-  if (!item) return null
-  const src = item.primary_image_url || item.primary_image || (item.images && item.images[0]?.image)
-  if (!src || typeof src !== 'string') return null
-  if (src.startsWith('http://') || src.startsWith('https://')) return src
-  const base = 'http://127.0.0.1:8000'
-  return src.startsWith('/') ? `${base}${src}` : `${base}/${src}`
-}
 
 export default function AdminInventoryManagement() {
   const [items, setItems] = useState([])

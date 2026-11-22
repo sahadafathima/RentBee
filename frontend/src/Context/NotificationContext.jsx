@@ -47,7 +47,7 @@ export function NotificationProvider({ children }) {
   useEffect(() => {
     if (userId && isPushSupported() && Notification.permission === 'granted') {
       subscribeToPushNotifications().catch((err) => {
-        console.debug('Background push subscription sync:', err.message)
+        console.warn('Background push subscription sync:', err.message)
       })
     }
   }, [userId])

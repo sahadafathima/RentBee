@@ -1069,17 +1069,21 @@ class CheckAvailabilityView(APIView):
 
         today = timezone.localdate()
         if start_date < today:
+            msg = 'Rental start date cannot be in the past.'
             return Response({
                 'is_available': False,
                 'status_label': 'Past Date',
-                'message': 'Rental start date cannot be in the past.'
+                'message': msg,
+                'error': msg,
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if end_date <= start_date:
+            msg = 'End date must be after start date.'
             return Response({
                 'is_available': False,
                 'status_label': 'Invalid Dates',
-                'message': 'End date must be after start date.'
+                'message': msg,
+                'error': msg,
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:

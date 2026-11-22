@@ -495,7 +495,7 @@ export async function apiRequest(endpoint, options = {}, isRetry = false) {
   // 5. HANDLE API ERRORS
 
   if (!response.ok) {
-    let errorMessage = data.detail || data.error
+    let errorMessage = data.detail || data.error || data.message
 
     if (!errorMessage && typeof data === 'object' && data !== null) {
       const fieldErrors = Object.entries(data)
