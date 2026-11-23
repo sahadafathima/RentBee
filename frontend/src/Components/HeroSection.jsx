@@ -1,9 +1,22 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 function HeroSection() {
+  const [searchTerm, setSearchTerm] = useState('')
+  const [location, setLocation] = useState('')
+  const navigate = useNavigate()
+
+  const handleSearch = (event) => {
+    event.preventDefault()
+    const params = new URLSearchParams()
+    if (searchTerm.trim()) params.set('search', searchTerm.trim())
+    if (location) params.set('location', location)
+    navigate(`/browse?${params.toString()}`)
+  }
+
   return (
     <section className="bg-[#FFFCF9] px-3 pb-5 pt-7 text-center sm:px-5 sm:pt-8">
       <div className="mx-auto max-w-3xl">
-
         <h1 className="text-3xl font-extrabold leading-[1.05] tracking-tight text-[#171412] sm:text-5xl">
           Rent what you need.
           <span className="text-[#D97745]">
@@ -19,9 +32,7 @@ function HeroSection() {
         </p>
 
         <form
-          onSubmit={(event) => {
-            event.preventDefault()
-          }}
+          onSubmit={handleSearch}
           className="mx-auto mt-4 flex max-w-2xl items-center gap-0 overflow-hidden rounded-full border border-orange-200 bg-white p-1 shadow-sm"
         >
           {/* Location selector */}
@@ -40,11 +51,12 @@ function HeroSection() {
 
             <select
               aria-label="Select location"
-              defaultValue=""
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
               className="min-w-0 flex-1 appearance-none bg-transparent py-2 text-[10px] text-[#49362D] outline-none sm:text-xs"
             >
-              <option value="" disabled>
-                Select Location
+              <option value="">
+                All Locations
               </option>
               <option value="Kochi">Kochi</option>
               <option value="Thrissur">Thrissur</option>
@@ -60,6 +72,8 @@ function HeroSection() {
           {/* Search input */}
           <input
             type="search"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search cameras, bikes, tools..."
             aria-label="Search rental items"
             className="min-w-0 flex-1 bg-transparent px-2 py-2 text-[10px] outline-none placeholder:text-gray-400 sm:px-3 sm:text-xs"

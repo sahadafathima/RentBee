@@ -6,8 +6,8 @@ import {
   UserRoundPen,
   MapPin,
   Store,
-  Inbox,
   Wallet,
+  Bell,
   LogOut,
   ChevronRight,
   UserRound,
@@ -99,6 +99,8 @@ function Profile() {
 
   // Profile menu options
   const profileOptions = [
+    { title: 'My Listings', description: 'Manage items you publish', icon: Store },
+    { title: 'Notifications', description: 'Booking updates and history', icon: Bell },
     {
       title: 'Edit Profile',
       description: 'Manage your personal details',
@@ -110,14 +112,9 @@ function Profile() {
       icon: MapPin,
     },
     {
-      title: 'Host Hub',
-      description: 'Manage your listed items',
+      title: 'Request Details',
+      description: 'Manage listed items & incoming requests',
       icon: Store,
-    },
-    {
-      title: 'Incoming Requests',
-      description: 'View rental requests',
-      icon: Inbox,
     },
     {
       title: 'Earnings & Payouts',
@@ -234,19 +231,24 @@ function Profile() {
                   type="button"
                   key={option.title}
                   onClick={() => {
-                    if (option.title === 'Edit Profile') {
+                    if (option.title === 'My Listings') {
+                      navigate('/my-listings')
+                    } else if (option.title === 'Notifications') {
+                      navigate('/notifications')
+                    } else if (option.title === 'Edit Profile') {
                       navigate('/edit-profile')
                     } else if (option.title === 'My Addresses') {
                       navigate('/my-address')
+                    } else if (option.title === 'Request Details') {
+                      navigate('/host-hub')
                     } else if (option.title === 'Logout') {
                       setShowLogoutConfirm(true)
                     }
                   }}
-                  className={`flex w-full items-center gap-3 px-4 py-4 text-left hover:bg-[#FFFAF6] ${
-                    index !== profileOptions.length - 1
+                  className={`flex w-full items-center gap-3 px-4 py-4 text-left hover:bg-[#FFFAF6] ${index !== profileOptions.length - 1
                       ? 'border-b border-orange-100'
                       : ''
-                  }`}
+                    }`}
                 >
 
                   {/* Option icon */}

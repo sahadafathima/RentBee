@@ -18,7 +18,6 @@ function AdminLogin() {
 
     try {
       const data = await adminLogin({ email, password })
-      console.log('Admin login response:', data)
 
       if (!data.user?.is_staff && !data.user?.is_superuser) {
   setError('You are not authorized to access the admin panel.')

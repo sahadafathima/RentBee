@@ -1,5 +1,6 @@
 
 import { useEffect, useState } from 'react'
+import AdminLayout from '../Components/AdminLayout'
 import {
   getAdminUsers,
   updateAdminUserStatus,
@@ -14,36 +15,40 @@ function UserManagement() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionLoading, setActionLoading] = useState(null)
-
-  const fetchUsers = async () => {
-    try {
-      setLoading(true)
-      setError('')
-
-      const params = { page }
-
-      if (appliedSearch) {
-        params.search = appliedSearch
-      }
-
-      const response = await getAdminUsers(params)
-
-      setUsers(response.results || [])
-      setTotalUsers(response.count || 0)
-    } catch (err) {
-      setError(err.message || 'Unable to load users.')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const [reloadToken, setReloadToken] = useState(0)
 
   useEffect(() => {
-    fetchUsers()
-  }, [page, appliedSearch])
+    let isCurrent = true
+    const params = { page }
+
+    if (appliedSearch) {
+      params.search = appliedSearch
+    }
+
+    getAdminUsers(params)
+      .then((response) => {
+        if (!isCurrent) return
+        setUsers(response.results || [])
+        setTotalUsers(response.count || 0)
+        setError('')
+      })
+      .catch((err) => {
+        if (!isCurrent) return
+        setError(err.message || 'Unable to load users.')
+      })
+      .finally(() => {
+        if (isCurrent) setLoading(false)
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [page, appliedSearch, reloadToken])
 
   const handleSearch = (event) => {
     event.preventDefault()
     setPage(1)
+    setLoading(true)
     setAppliedSearch(search.trim())
   }
 
@@ -51,6 +56,7 @@ function UserManagement() {
     setSearch('')
     setAppliedSearch('')
     setPage(1)
+    setLoading(true)
   }
 
   const handleUserStatus = async (user) => {
@@ -65,7 +71,7 @@ function UserManagement() {
     try {
       setActionLoading(user.id)
       await updateAdminUserStatus(user.id, action)
-      await fetchUsers()
+      setReloadToken((t) => t + 1)
     } catch (err) {
       setError(err.message || 'Unable to update user status.')
     } finally {
@@ -101,7 +107,11 @@ function UserManagement() {
   const totalPages = Math.ceil(totalUsers / 10)
 
   return (
-    <div className="min-h-screen bg-[#FAF5F0] p-6 text-[#302820]">
+    <AdminLayout
+      pageTitle="User Management"
+      breadcrumbs={['Admin Panel', 'Users', 'User Management']}
+    >
+      <div className="w-full text-[#302820]">
 
       <div className="mb-6 flex items-center justify-between">
         <div>
@@ -287,7 +297,8 @@ function UserManagement() {
         </div>
       )}
 
-    </div>
+      </div>
+    </AdminLayout>
   )
 }
 

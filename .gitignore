@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Database & Dumps
+*.sqlite3
+db.sqlite3
+*.dump
+*.sql
+backup_*.json
+*_dev_data.json
+
+# Virtual Environment & Secrets
+env/
+venv/
+.env
+.env.local
+*.pem
+backend/vapid_dev_private.pem
+
+# Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+*.local
+
+# Media Uploads (keep directory structure)
+backend/media/item_images/*
+!backend/media/item_images/.gitkeep
+

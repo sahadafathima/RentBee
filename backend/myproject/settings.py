@@ -12,22 +12,44 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from datetime import timedelta
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load .env file from backend/ or project root if present
+for env_candidate in [BASE_DIR / '.env', BASE_DIR.parent / '.env']:
+    if env_candidate.exists():
+        with open(env_candidate, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip("'").strip('"'))
+        break
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-o06sc0la#62%nx1-7a@r3ps6!7(beta$20ub8vg)e-s9rz4c-)'
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = []
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG or 'test' in sys.argv:
+        SECRET_KEY = 'django-insecure-development-only-key-do-not-use-in-production'
+    else:
+        raise ImproperlyConfigured(
+            'DJANGO_SECRET_KEY environment variable is required when DEBUG is False.'
+        )
+
+allowed_hosts_env = os.environ.get('DJANGO_ALLOWED_HOSTS', '')
+ALLOWED_HOSTS = [h.strip() for h in allowed_hosts_env.split(',') if h.strip()] if allowed_hosts_env else ['localhost', '127.0.0.1']
+if 'testserver' not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append('testserver')
 
 
 # Application definition
@@ -51,7 +73,12 @@ INSTALLED_APPS = [
     'addresses',
     'admin_panel',
     'rest_framework_simplejwt.token_blacklist',
+    'catalog',
+    'bookings',
 ]
+
+# Booking and Rental Settings
+RENTAL_PENDING_APPROVAL_EXPIRY_HOURS = 24
 AUTH_USER_MODEL = 'users.User'
 SITE_ID = 1
 MIDDLEWARE = [
@@ -92,16 +119,32 @@ WSGI_APPLICATION = 'myproject.wsgi.application'
 
 
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'rentbee_dev',
-        'USER': 'postgres',
-        'PASSWORD': os.environ.get('RENTBEE_DB_PASSWORD', 'asdfghjkl'),
-        'HOST': 'localhost',
-        'PORT': '5432',
+if 'test' in sys.argv:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
     }
-}
+    PASSWORD_HASHERS = [
+        'django.contrib.auth.hashers.MD5PasswordHasher',
+    ]
+else:
+    db_password = os.environ.get('DB_PASSWORD') or os.environ.get('RENTBEE_DB_PASSWORD')
+    if not db_password:
+        raise ImproperlyConfigured(
+            'Database password must be set via DB_PASSWORD or RENTBEE_DB_PASSWORD.'
+        )
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'rentbee_dev'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
+            'PASSWORD': db_password,
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+        }
+    }
 
 
 # Password validation
@@ -139,14 +182,38 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-# Email Configuration — Development Testing
-
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# Centralized Real Email Delivery via Gmail SMTP Configuration
+# Uses real SMTP delivery by default; never silently falls back to console delivery.
+EMAIL_BACKEND = os.environ.get(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.smtp.EmailBackend'
+)
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+try:
+    EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
+except (ValueError, TypeError):
+    EMAIL_PORT = 587
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() in ('true', '1', 'yes')
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False').lower() in ('true', '1', 'yes')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.environ.get(
+    'DEFAULT_FROM_EMAIL',
+    f"RentBee <{os.environ.get('EMAIL_HOST_USER', 'noreply@rentbee.com')}>"
+)
+try:
+    EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 10))
+except (ValueError, TypeError):
+    EMAIL_TIMEOUT = 10
 
 
 REST_FRAMEWORK = {
@@ -159,16 +226,43 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': False,
 }
 
-CORS_ALLOWED_ORIGINS = [
+# Default allowed origins for local Vite development
+DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
 ]
 
-    # its allow to the auth user and allow permission
+cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+if cors_env:
+    env_origins = [c.strip() for c in cors_env.split(',') if c.strip()]
+    CORS_ALLOWED_ORIGINS = list(dict.fromkeys(DEFAULT_CORS_ORIGINS + env_origins))
+else:
+    CORS_ALLOWED_ORIGINS = DEFAULT_CORS_ORIGINS
+
+if DEBUG:
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^http://(localhost|127\.0\.0\.1):(517[3-9]|3000)$",
+    ]
+
+# Web Push VAPID Configuration (Loaded from environment variables)
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_CLAIM_EMAIL = os.environ.get('VAPID_CLAIM_EMAIL', 'mailto:support@rentbee.com')
+
+# Razorpay Payment Gateway Configuration
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
+RAZORPAY_WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
+
 

@@ -41,6 +41,27 @@ const handleChange = (event) => {
     if (value.length > 10) {
       return
     }
+    
+    if (value.length === 10){
+      
+      let res = value.split('')
+      let phone_number = {}
+      res.map((value) => {
+        if (phone_number[value]){
+          phone_number[value] ++
+        }else{
+          phone_number[value] = 1
+        }
+      })
+      
+      if(Object.keys(phone_number).length <= 3){
+        setErrorMessage(" Phone number is invalid ")
+        return 
+      }else{
+        setErrorMessage("")
+      }
+      
+    }
   }
 
   setFormData((previousData) => ({
@@ -100,8 +121,8 @@ const handleChange = (event) => {
         otp: otp.trim(),
       })
 
-      if (data.token) {
-       saveAuthTokens(data.access, data.refresh)
+      if (data.access && data.refresh) {
+        saveAuthTokens(data.access, data.refresh)
       }
 
       setStep('success')
@@ -299,10 +320,10 @@ const handleChange = (event) => {
               )}
 
               <Link
-                to="/login"
+                to="/"
                 className="block w-full rounded-xl bg-[#9D4C29] px-4 py-3 text-center font-semibold text-white transition hover:bg-[#843E21]"
               >
-                Log In
+                Go to Home
               </Link>
             </div>
           )}

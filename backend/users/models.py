@@ -94,18 +94,8 @@ class EmailChangeOTP(models.Model):
 
     def __str__(self):
         return self.new_email
-    
 
-class LoginOTP(models.Model):
-    email = models.EmailField()
-    otp_hash = models.CharField(max_length=128)
-    expires_at = models.DateTimeField()
-    attempts = models.PositiveSmallIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):
-        return self.email
-    
 class Profile(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -115,6 +105,12 @@ class Profile(models.Model):
 
     profile_image = models.ImageField(
         upload_to="profile_images/",
+        blank=True,
+        null=True
+    )
+    upi_id = models.CharField(max_length=100, blank=True, default='')
+    qr_code = models.ImageField(
+        upload_to="qr_codes/",
         blank=True,
         null=True
     )

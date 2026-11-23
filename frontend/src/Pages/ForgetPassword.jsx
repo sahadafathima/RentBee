@@ -1,4 +1,3 @@
-
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import InputField from '../Components/InputField'
@@ -8,45 +7,17 @@ import logo from '../assets/rentbee_logo.png'
 
 function ForgotPassword() {
   const [email, setEmail] = useState('')
-  const [newPassword, setNewPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const navigate = useNavigate()
 
-  const getErrorMessage = (error) => {
-    try {
-      const details = JSON.parse(error.message)
-
-      if (details.detail) return details.detail
-      if (details.error) {
-        return Array.isArray(details.error)
-          ? details.error.join(', ')
-          : details.error
-      }
-
-      return Object.entries(details)
-        .map(([field, errors]) => {
-          const text = Array.isArray(errors)
-            ? errors.join(', ')
-            : String(errors)
-
-          return `${field}: ${text}`
-        })
-        .join('\n')
-    } catch {
-      return error.message || 'Something went wrong. Please try again.'
-    }
-  }
-
   const handleSubmit = async (event) => {
     event.preventDefault()
-
-  console.log('Forgot Password form submitted')
     setErrorMessage('')
 
-    if (newPassword !== confirmPassword) {
-      setErrorMessage('Passwords do not match.')
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail) {
+      setErrorMessage('Please enter your email address.')
       return
     }
 
@@ -54,18 +25,17 @@ function ForgotPassword() {
 
     try {
       await sendPasswordResetOTP({
-        email: email.trim(),
+        email: trimmedEmail,
       })
 
       navigate('/reset-password', {
         state: {
-          email: email.trim(),
-          newPassword,
+          email: trimmedEmail,
         },
       })
     } catch (error) {
       console.error('Password reset OTP error:', error)
-      setErrorMessage(getErrorMessage(error))
+      setErrorMessage(error.message || 'Unable to send password reset code.')
     } finally {
       setLoading(false)
     }
@@ -74,6 +44,16 @@ function ForgotPassword() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#FFF8F5] px-4 py-8">
       <div className="w-full max-w-md">
+        <div className="mb-4">
+          <Link
+            to="/login"
+            className="inline-flex items-center gap-2 text-sm font-medium text-[#9D4C29] transition hover:text-[#813B20]"
+          >
+            <span aria-hidden="true">←</span>
+            Back to Login
+          </Link>
+        </div>
+
         <div className="mb-6 flex justify-center">
           <img
             src={logo}
@@ -88,8 +68,7 @@ function ForgotPassword() {
               Forgot Password?
             </h1>
             <p className="mt-2 text-sm text-[#8B776D]">
-              Enter your email and choose a new password.
-              We will send you an OTP to verify your email.
+              Enter your registered email address. We will send you a 6-digit verification code to reset your password.
             </p>
           </div>
 
@@ -100,32 +79,9 @@ function ForgotPassword() {
               type="email"
               placeholder="you@example.com"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(e) => setEmail(e.target.value)}
+              required
               autoComplete="email"
-              required
-            />
-
-            <InputField
-              label="New Password"
-              name="new_password"
-              type="password"
-              placeholder="Enter new password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              autoComplete="new-password"
-              required
-            />
-
-            <InputField
-              label="Confirm New Password"
-              name="confirm_password"
-              type="password"
-              placeholder="Re-enter new password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              autoComplete="new-password"
-              showPasswordToggle={false}
-              required
             />
 
             {errorMessage && (
@@ -138,19 +94,21 @@ function ForgotPassword() {
             )}
 
             <Button type="submit" disabled={loading}>
-              {loading ? 'Sending OTP...' : 'Reset Password'}
+              {loading ? 'Sending Code...' : 'Send Reset Code'}
             </Button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-[#8B776D]">
-            Remember your password?{' '}
-            <Link
-              to="/login"
-              className="font-semibold text-[#9D4C29] hover:underline"
-            >
-              Log In
-            </Link>
-          </p>
+          <div className="mt-6 border-t border-[#F0E4DE] pt-5 text-center">
+            <p className="text-sm text-[#8B776D]">
+              Remember your password?{' '}
+              <Link
+                to="/login"
+                className="font-semibold text-[#9D4C29] hover:underline"
+              >
+                Log In
+              </Link>
+            </p>
+          </div>
         </div>
       </div>
     </div>
